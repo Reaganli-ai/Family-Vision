@@ -1,0 +1,115 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Clean white palette */
+    --background: 0 0% 100%;        /* #FFFFFF pure white */
+    --foreground: 24 6% 16%;        /* #2D2A26 warm deep brown */
+
+    --card: 0 0% 100%;
+    --card-foreground: 24 6% 16%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 24 6% 16%;
+
+    --primary: 16 74% 60%;          /* #E8734A warm orange-red */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 0 0% 97%;          /* #F8F8F8 */
+    --secondary-foreground: 24 6% 16%;
+
+    --muted: 0 0% 96%;              /* #F5F5F5 */
+    --muted-foreground: 0 0% 45%;   /* #737373 neutral gray */
+
+    --accent: 30 55% 82%;           /* #D4A76A gold */
+    --accent-foreground: 24 6% 16%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 0 0% 90%;             /* #E5E5E5 neutral border */
+    --input: 0 0% 90%;
+    --ring: 16 74% 60%;
+
+    --radius: 0.75rem;
+
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 24 6% 16%;
+    --sidebar-primary: 16 74% 60%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 25 25% 94%;
+    --sidebar-accent-foreground: 24 6% 16%;
+    --sidebar-border: 25 18% 91%;
+    --sidebar-ring: 16 74% 60%;
+
+    /* Custom tokens */
+    --warm-gradient: 0 0% 100%;
+    --peach: 20 80% 92%;
+    --peach-light: 25 100% 96%;
+    --rose-mist: 340 60% 92%;
+    --brand-rose: 16 74% 60%;       /* #E8734A */
+    --brand-rose-foreground: 0 0% 100%;
+    --gold: 30 55% 62%;
+    --blue-gray: 210 25% 55%;
+    --snapshot-bg: 0 0% 100%;
+    --disabled: 0 0% 80%;           /* #CCCCCC */
+    --ai-bubble: 0 0% 95%;           /* light gray for AI */
+    --ai-bubble-foreground: 24 6% 16%;
+    --user-bubble: 220 13% 18%;     /* dark for user */
+    --user-bubble-foreground: 0 0% 95%;
+    --completed: 210 25% 55%;       /* #6B8EAE */
+
+    font-family: -apple-system, "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
+  }
+
+  .dark {
+    --background: 24 8% 6%;
+    --foreground: 30 10% 92%;
+    --card: 24 8% 10%;
+    --card-foreground: 30 10% 92%;
+    --popover: 24 8% 10%;
+    --popover-foreground: 30 10% 92%;
+    --primary: 16 74% 60%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 24 8% 14%;
+    --secondary-foreground: 30 10% 92%;
+    --muted: 24 8% 18%;
+    --muted-foreground: 20 5% 60%;
+    --accent: 30 55% 50%;
+    --accent-foreground: 30 10% 92%;
+    --destructive: 0 62% 30%;
+    --destructive-foreground: 0 0% 95%;
+    --border: 24 8% 18%;
+    --input: 24 8% 18%;
+    --ring: 16 74% 60%;
+    --sidebar-background: 24 8% 10%;
+    --sidebar-foreground: 30 10% 85%;
+    --sidebar-primary: 16 74% 60%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 24 8% 14%;
+    --sidebar-accent-foreground: 30 10% 85%;
+    --sidebar-border: 24 8% 18%;
+    --sidebar-ring: 16 74% 60%;
+    --ai-bubble: 24 8% 14%;
+    --user-bubble: 24 8% 18%;
+    --completed: 210 25% 55%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+}
+
+@layer utilities {
+  .bg-warm-gradient {
+    background: var(--warm-gradient);
+  }
+}
