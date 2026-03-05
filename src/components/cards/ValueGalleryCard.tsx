@@ -70,59 +70,116 @@ interface Props {
   disabled?: boolean;
 }
 
+const CORE_COUNT = 3;
+const DEFER_COUNT = 2;
+const TOTAL_NEEDED = CORE_COUNT + DEFER_COUNT;
+
 const ValueGalleryCard = ({ onConfirm, disabled = false }: Props) => {
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [step, setStep] = useState<"core" | "deferred" | "done">("core");
+  const [core, setCore] = useState<Set<string>>(new Set());
+  const [deferred, setDeferred] = useState<Set<string>>(new Set());
   const [confirmed, setConfirmed] = useState(false);
 
-  const allItems = COLUMNS.flatMap((c) => c.items.map((i) => i.label));
-
-  const toggle = (label: string) => {
-    setSelected((prev) => {
+  const toggleCore = (label: string) => {
+    setCore((prev) => {
       const next = new Set(prev);
       if (next.has(label)) {
         next.delete(label);
-      } else {
+      } else if (next.size < CORE_COUNT) {
         next.add(label);
+      } else {
+        // Replace: remove oldest, add new
+        const arr = Array.from(next);
+        arr.shift();
+        return new Set([...arr, label]);
       }
       return next;
     });
   };
 
-  const clearAll = () => setSelected(new Set());
+  const toggleDeferred = (label: string) => {
+    if (core.has(label)) return; // can't defer a core pick
+    setDeferred((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) {
+        next.delete(label);
+      } else if (next.size < DEFER_COUNT) {
+        next.add(label);
+      } else {
+        const arr = Array.from(next);
+        arr.shift();
+        return new Set([...arr, label]);
+      }
+      return next;
+    });
+  };
 
   const handleConfirm = () => {
-    const core = Array.from(selected);
-    const deferred = allItems.filter((item) => !selected.has(item));
     setConfirmed(true);
-    onConfirm({ core, deferred });
+    onConfirm({ core: Array.from(core), deferred: Array.from(deferred) });
   };
 
   if (confirmed || disabled) {
-    const core = Array.from(selected);
     return (
       <div className="bg-card border border-border rounded-xl p-4 opacity-80">
-        <p className="text-[12px] text-muted-foreground mb-2">价值观画廊 · 已完成</p>
-        <div className="flex flex-wrap gap-1.5">
-          {core.map((v) => (
-            <span key={v} className="text-[12px] bg-primary/10 text-primary px-2.5 py-1 rounded-full font-medium">{v}</span>
-          ))}
+        <p className="text-[12px] text-muted-foreground mb-2">价值观选择 · 已完成</p>
+        <div className="space-y-1.5">
+          <div className="flex flex-wrap gap-1.5">
+            <span className="text-[10px] text-muted-foreground mr-1">核心聚焦：</span>
+            {Array.from(core).map((v) => (
+              <span key={v} className="text-[12px] bg-primary/10 text-primary px-2.5 py-1 rounded-full font-medium">{v}</span>
+            ))}
+          </div>
+          {deferred.size > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              <span className="text-[10px] text-muted-foreground mr-1">战略暂缓：</span>
+              {Array.from(deferred).map((v) => (
+                <span key={v} className="text-[12px] bg-secondary text-muted-foreground px-2.5 py-1 rounded-full">{v}</span>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     );
   }
 
+  const isCorePicking = step === "core";
+  const isDeferredPicking = step === "deferred";
+
   return (
     <div className="bg-card border-2 border-primary/20 rounded-xl p-5 space-y-4">
+      {/* Title */}
       <div>
-        <p className="text-[14px] font-medium text-foreground">
-          凭直觉选出你们家最看重的价值观
+        <p className="text-[14px] font-semibold text-foreground">
+          请凭直觉选 {CORE_COUNT} 个【核心聚焦】+ {DEFER_COUNT} 个【战略暂缓】
         </p>
-        <p className="text-[12px] text-muted-foreground mt-1">
-          不用想太多，选 5-7 个最能代表你们家庭信念的词。没选到的不代表不重要，只是「战略暂缓」。
+        <p className="text-[12px] text-muted-foreground mt-1 leading-relaxed">
+          核心聚焦 = 未来 12 个月优先投入；战略暂缓 = 重要但先放一放。
         </p>
       </div>
 
-      {/* 4-column grid on desktop, 2 columns on mobile */}
+      {/* Step indicator */}
+      <div className="flex items-center gap-3 text-[12px]">
+        <span className={`px-3 py-1 rounded-full font-medium transition-colors ${
+          isCorePicking ? "bg-primary text-primary-foreground" : core.size === CORE_COUNT ? "bg-completed/10 text-completed" : "bg-secondary text-muted-foreground"
+        }`}>
+          ① 核心聚焦 {core.size}/{CORE_COUNT}
+        </span>
+        <span className={`px-3 py-1 rounded-full font-medium transition-colors ${
+          isDeferredPicking ? "bg-primary text-primary-foreground" : deferred.size === DEFER_COUNT ? "bg-completed/10 text-completed" : "bg-secondary text-muted-foreground"
+        }`}>
+          ② 战略暂缓 {deferred.size}/{DEFER_COUNT}
+        </span>
+      </div>
+
+      {/* Instruction for current step */}
+      <p className="text-[12px] text-primary font-medium">
+        {isCorePicking
+          ? `→ 先选 ${CORE_COUNT} 个你们最看重的价值观`
+          : `→ 再选 ${DEFER_COUNT} 个"重要但先放一放"的价值观`}
+      </p>
+
+      {/* 4-column grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {COLUMNS.map((col) => (
           <div key={col.title} className={`rounded-xl overflow-hidden ${col.bgClass}`}>
@@ -131,21 +188,44 @@ const ValueGalleryCard = ({ onConfirm, disabled = false }: Props) => {
             </div>
             <div className="p-2 space-y-1.5">
               {col.items.map((item) => {
-                const isSelected = selected.has(item.label);
+                const isCore = core.has(item.label);
+                const isDeferred = deferred.has(item.label);
+                const isSelected = isCore || isDeferred;
+                // In deferred step, core picks are locked
+                const isLocked = isDeferredPicking && isCore;
+
                 return (
                   <button
                     key={item.label}
-                    onClick={() => toggle(item.label)}
+                    onClick={() => {
+                      if (isLocked) return;
+                      if (isCorePicking) {
+                        toggleCore(item.label);
+                      } else {
+                        if (isDeferred) {
+                          toggleDeferred(item.label);
+                        } else if (!isCore) {
+                          toggleDeferred(item.label);
+                        }
+                      }
+                    }}
                     className={`w-full flex items-start gap-2 px-2.5 py-2 rounded-lg text-left transition-all ${
-                      isSelected
+                      isLocked
+                        ? "bg-white/90 opacity-60 cursor-not-allowed"
+                        : isSelected
                         ? "bg-white/90 shadow-sm ring-1 ring-primary/30"
                         : "bg-white/50 hover:bg-white/70"
                     }`}
                   >
                     <div className={`mt-0.5 w-4 h-4 rounded flex-shrink-0 flex items-center justify-center border transition-all ${
-                      isSelected ? col.checkClass + " border-transparent" : "border-gray-300 bg-white"
+                      isCore
+                        ? col.checkClass + " border-transparent"
+                        : isDeferred
+                        ? "border-gray-400 bg-gray-400 border-transparent"
+                        : "border-gray-300 bg-white"
                     }`}>
-                      {isSelected && <Check size={10} className="text-white" strokeWidth={3} />}
+                      {isCore && <Check size={10} className="text-white" strokeWidth={3} />}
+                      {isDeferred && <span className="text-[8px] text-white font-bold">缓</span>}
                     </div>
                     <div className="min-w-0">
                       <p className={`text-[12px] font-medium ${isSelected ? "text-foreground" : "text-foreground/80"}`}>
@@ -164,44 +244,73 @@ const ValueGalleryCard = ({ onConfirm, disabled = false }: Props) => {
       </div>
 
       {/* Selected summary */}
-      {selected.size > 0 && (
-        <div className="bg-secondary/40 rounded-lg px-4 py-3">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-[12px] text-muted-foreground">
-              已选 <span className="font-semibold text-foreground">{selected.size}</span> 项
-              {selected.size < 5 && " · 建议选 5-7 个"}
-              {selected.size > 7 && " · 建议精简到 5-7 个"}
-            </p>
-            <button
-              onClick={clearAll}
-              className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <X size={12} />
-              清空
-            </button>
+      <div className="bg-secondary/40 rounded-lg px-4 py-3 space-y-2">
+        {core.size > 0 && (
+          <div>
+            <p className="text-[11px] text-muted-foreground mb-1">核心聚焦（{core.size}/{CORE_COUNT}）</p>
+            <div className="flex flex-wrap gap-1.5">
+              {Array.from(core).map((v) => (
+                <span
+                  key={v}
+                  onClick={() => { if (isCorePicking) toggleCore(v); }}
+                  className={`text-[11px] bg-primary/10 text-primary px-2.5 py-1 rounded-full font-medium ${
+                    isCorePicking ? "cursor-pointer hover:bg-primary/20" : ""
+                  } transition-colors`}
+                >
+                  {v} {isCorePicking && "×"}
+                </span>
+              ))}
+            </div>
           </div>
-          <div className="flex flex-wrap gap-1.5">
-            {Array.from(selected).map((v) => (
-              <span
-                key={v}
-                onClick={() => toggle(v)}
-                className="text-[11px] bg-primary/10 text-primary px-2.5 py-1 rounded-full font-medium cursor-pointer hover:bg-primary/20 transition-colors"
-              >
-                {v} &times;
-              </span>
-            ))}
+        )}
+        {deferred.size > 0 && (
+          <div>
+            <p className="text-[11px] text-muted-foreground mb-1">战略暂缓（{deferred.size}/{DEFER_COUNT}）</p>
+            <div className="flex flex-wrap gap-1.5">
+              {Array.from(deferred).map((v) => (
+                <span
+                  key={v}
+                  onClick={() => toggleDeferred(v)}
+                  className="text-[11px] bg-secondary text-muted-foreground px-2.5 py-1 rounded-full cursor-pointer hover:bg-secondary/80 transition-colors"
+                >
+                  {v} ×
+                </span>
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        )}
+        {core.size === 0 && deferred.size === 0 && (
+          <p className="text-[11px] text-muted-foreground/50">点击上方卡片开始选择</p>
+        )}
+      </div>
 
-      <div className="flex justify-end pt-1">
-        <button
-          onClick={handleConfirm}
-          disabled={selected.size === 0}
-          className="px-5 py-2 rounded-lg text-[13px] font-medium transition-all bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          确认价值观 →
-        </button>
+      {/* Action buttons */}
+      <div className="flex justify-end gap-2 pt-1">
+        {isCorePicking && core.size === CORE_COUNT && (
+          <button
+            onClick={() => setStep("deferred")}
+            className="px-5 py-2 rounded-lg text-[13px] font-medium bg-primary text-primary-foreground hover:opacity-90 transition-all"
+          >
+            下一步：选战略暂缓 →
+          </button>
+        )}
+        {isDeferredPicking && (
+          <>
+            <button
+              onClick={() => setStep("core")}
+              className="px-4 py-2 rounded-lg text-[13px] text-muted-foreground border border-border hover:bg-secondary/50 transition-colors"
+            >
+              ← 返回修改
+            </button>
+            <button
+              onClick={handleConfirm}
+              disabled={deferred.size < DEFER_COUNT}
+              className="px-5 py-2 rounded-lg text-[13px] font-medium bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+            >
+              确认价值观 →
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
