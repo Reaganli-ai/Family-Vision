@@ -119,7 +119,7 @@ const ProgressPanel = ({
                             isActive
                               ? "text-primary font-medium"
                               : isDone
-                              ? "text-foreground/60"
+                              ? "text-completed"
                               : "text-disabled"
                           }`}
                         >
@@ -155,22 +155,42 @@ const ProgressPanel = ({
             </div>
             <div className="w-full h-1 bg-border/40 rounded-full overflow-hidden mb-2.5">
               <div
-                className="h-full rounded-full bg-primary transition-all duration-300"
-                style={{ width: `${completionPercent}%` }}
+                className="h-full rounded-full transition-all duration-300"
+                style={{
+                  width: `${completionPercent}%`,
+                  backgroundColor: allComplete ? 'hsl(var(--completed))' : 'hsl(var(--primary))',
+                }}
               />
             </div>
 
             <button
               onClick={() => {
                 if (allComplete) {
-                  // TODO: actual export logic
+                  const date = new Date().toLocaleDateString("zh-CN");
+                  const sections = (conversationSummary || "暂无总结内容")
+                    .split("---")
+                    .map((s) => s.trim())
+                    .filter(Boolean)
+                    .map((section) => {
+                      const lines = section.split("\n");
+                      const title = lines[0] || "";
+                      const body = lines.slice(1).join("\n").trim();
+                      return `<div class="section"><h2>${title}</h2><p>${body}</p></div>`;
+                    })
+                    .join("");
+                  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>家庭战略定位罗盘</title><style>@media print{@page{margin:20mm 15mm;}body{-webkit-print-color-adjust:exact;print-color-adjust:exact;}}*{box-sizing:border-box;margin:0;padding:0;}body{font-family:-apple-system,"PingFang SC","Noto Sans SC",sans-serif;max-width:700px;margin:0 auto;padding:40px 24px;color:#2D2A26;}.header{text-align:center;margin-bottom:40px;border-bottom:2px solid #187A4B;padding-bottom:20px;}.header h1{font-size:24px;letter-spacing:2px;margin-bottom:6px;}.header .date{color:#999;font-size:13px;}.section{margin-bottom:28px;page-break-inside:avoid;}.section h2{font-size:15px;color:#187A4B;margin-bottom:10px;padding-left:12px;border-left:3px solid #187A4B;}.section p{font-size:14px;line-height:1.9;color:#444;white-space:pre-wrap;padding-left:15px;}.footer{margin-top:48px;text-align:center;color:#ccc;font-size:11px;border-top:1px solid #eee;padding-top:16px;}.no-print{text-align:center;margin-bottom:24px;}.no-print button{background:#187A4B;color:white;border:none;padding:10px 32px;border-radius:8px;font-size:14px;cursor:pointer;font-family:inherit;}.no-print button:hover{opacity:0.9;}@media print{.no-print{display:none;}}</style></head><body><div class="no-print"><button onclick="window.print()">保存为 PDF / 打印</button></div><div class="header"><h1>家庭战略定位罗盘</h1><p class="date">生成日期：${date}</p></div>${sections}<div class="footer">&copy; 彼灯教育科技 · 家庭愿景工坊</div></body></html>`;
+                  const w = window.open("", "_blank");
+                  if (w) {
+                    w.document.write(html);
+                    w.document.close();
+                  }
                 } else {
                   setShowExportConfirm(true);
                 }
               }}
               className={`w-full flex items-center justify-center gap-1.5 text-[12px] font-medium rounded-lg px-3 py-1.5 transition-all whitespace-nowrap ${
                 allComplete
-                  ? "bg-primary text-primary-foreground hover:opacity-90 cursor-pointer"
+                  ? "bg-completed text-white hover:opacity-90 cursor-pointer"
                   : "bg-muted text-muted-foreground cursor-default"
               }`}
             >

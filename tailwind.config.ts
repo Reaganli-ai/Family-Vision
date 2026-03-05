@@ -81,7 +81,10 @@ export default {
           DEFAULT: "hsl(var(--user-bubble))",
           foreground: "hsl(var(--user-bubble-foreground))",
         },
-        completed: "hsl(var(--completed))",
+        completed: {
+          DEFAULT: "hsl(var(--completed))",
+          light: "hsl(var(--completed-light))",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",

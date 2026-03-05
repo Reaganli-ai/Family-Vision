@@ -59,7 +59,8 @@
     --ai-bubble-foreground: 24 6% 16%;
     --user-bubble: 220 13% 18%;     /* dark for user */
     --user-bubble-foreground: 0 0% 95%;
-    --completed: 210 25% 55%;       /* #6B8EAE */
+    --completed: 152 69% 31%;       /* #187A4B emerald-700 — professional, not gamified */
+    --completed-light: 149 80% 95%; /* #ECFDF5 emerald-50 — subtle bg for done items */
 
     font-family: -apple-system, "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
   }
@@ -94,7 +95,8 @@
     --sidebar-ring: 16 74% 60%;
     --ai-bubble: 24 8% 14%;
     --user-bubble: 24 8% 18%;
-    --completed: 210 25% 55%;
+    --completed: 152 69% 38%;
+    --completed-light: 149 40% 18%;
   }
 }
 
