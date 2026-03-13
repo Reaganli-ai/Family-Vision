@@ -54,12 +54,24 @@ function buildSummary(rows: CapitalRow[]): string[] {
   });
 }
 
-function getHighlight(rows: CapitalRow[]): string {
-  const sorted = [...rows].sort((a, b) => {
-    const order = { L3: 3, L2: 2, L1: 1 };
-    return (order[b.level as keyof typeof order] || 0) - (order[a.level as keyof typeof order] || 0);
-  });
-  return sorted[0]?.label || "";
+function getHighlightText(rows: CapitalRow[]): string {
+  const order: Record<string, number> = { L3: 3, L2: 2, L1: 1 };
+  const sorted = [...rows].sort((a, b) => (order[b.level] || 0) - (order[a.level] || 0));
+  const maxLevel = order[sorted[0]?.level] || 0;
+  const minLevel = order[sorted[sorted.length - 1]?.level] || 0;
+
+  const top = sorted.filter((r) => (order[r.level] || 0) === maxLevel);
+  const bottom = sorted.filter((r) => (order[r.level] || 0) === minLevel);
+
+  if (top.length === rows.length) {
+    // All same level
+    return "三项资本水平相当，整体均衡";
+  }
+  if (top.length === 1) {
+    return `最可依仗的是${top[0].label}，${bottom.map((r) => r.label).join("和")}相对更需要提升`;
+  }
+  // Multiple tied at top
+  return `${top.map((r) => r.label).join("和")}都不错，${bottom.map((r) => r.label).join("和")}相对更需要提升`;
 }
 
 const CapitalSummaryCard = ({ rows, onConfirm, disabled }: Props) => {
@@ -68,7 +80,7 @@ const CapitalSummaryCard = ({ rows, onConfirm, disabled }: Props) => {
   const [detail, setDetail] = useState("");
 
   const summaryLines = buildSummary(rows);
-  const strongest = getHighlight(rows);
+  const highlightText = getHighlightText(rows);
 
   if (disabled) {
     return (
@@ -149,7 +161,7 @@ const CapitalSummaryCard = ({ rows, onConfirm, disabled }: Props) => {
           ))}
         </div>
         <p className="text-[12px] text-muted-foreground mt-3">
-          目前来看，你们家最可依仗的是<strong className="text-foreground">{strongest}</strong>。
+          目前来看，{highlightText}。
         </p>
       </div>
 

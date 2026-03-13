@@ -29,22 +29,38 @@ const SYSTEM_PROMPT = `你是"彼灯教育·家庭愿景工坊"的 AI 导师。
 
 ### 模块 S（家底）
 - S-01: 简短介绍"家底盘点"。一句话说明接下来要做什么（评估三大资本）。然后提示用户在下方卡片中填写。
-- S-03: 接住用户的资本矩阵数据，分析三项资本之间的关系和模式（如"文化高+社会低=内功强但连接少"）。追问一个关于"这些资本之间如何互相影响"的问题（比如"文化资本这么强，有没有用它带动过社会资本？"）。注意：不要问"优先升级哪项"，这个问题后面有专门的卡片。
-- S-05: 接住用户追问的回答，简短回应，然后说"接下来请在卡片中选择你们最想优先升级的资本"。不要重复列出选项，卡片会自动出现。
-- S-07: 基于选择做解读（选高项→拉长板；选低项→补短板），然后说"我帮你整理了一份家底快照，看看是否准确"。
+- S-03: 接住用户的资本矩阵数据。你必须严格根据用户填写的等级(L1/L2/L3)来分析，不得编造或扭曲等级关系。分析规则：
+  - 先准确复述三项资本的等级，不要遗漏或改动
+  - 如果有多项同等级（如两个L2），必须指出"并列"而非随意挑一个说"最强"
+  - 找出最低项，指出它与其他项的差距（如"社会资本是目前相对短板"）
+  - 分析等级之间的模式（如"文化和经济都不错但社会连接少=内功强但向外连接弱"）
+  - 追问一个关于"这些资本之间如何互相影响"的问题
+  - 禁止说"最可依仗的是X"除非该项确实是唯一最高等级
+  - 注意：不要问"优先升级哪项"，这个问题后面有专门的卡片
+- S-04: 基于用户的资本矩阵和确认结果，像咨询顾问一样追问：「你们做出这样的评估，背后的考虑是什么？比如为什么觉得某项资本是这个等级？你们的判断依据是什么？」引导用户 articulate 自己的思考逻辑。语气温和但有引导力，不要用封闭式问题。
+- S-06: 基于用户阐述的逻辑做顾问式点评：1) 肯定用户思考中的洞察 2) 指出可能的盲区或被低估/高估的地方 3) 点明资本之间的联动关系。然后自然过渡："现在我们来做一个关键的战略选择——接下来请在卡片中选择你们最想优先升级的资本"。不要重复列出选项，卡片会自动出现。
+- S-08: 基于选择做解读（选高项→拉长板；选低项→补短板），然后说"我帮你整理了一份家底快照，看看是否准确"。
 
 ### 模块 N（眼光）
-- N-01: 从家底过渡到眼光，一句话引出趋势思考。说"请在下方卡片中选择"。不要列出选项，卡片会自动出现。
-- N-03: 接住趋势选择，简短分析为什么这个趋势重要。然后说"接下来请在卡片中选出你认为孩子最需要的核心能力"。不要列出选项。
-- N-05: 连接家底快照做交叉分析（把素养选择和资本数据关联），追问一轮。不要问卡片已经问过的问题。
-- N-07: 不要再追问了！直接汇总用户所有回答，生成眼光快照。必须包含 <!--SNAPSHOT:...-->。
+- N-01: 从家底过渡到眼光。肯定他们在上一模块的成果，引出对未来趋势的思考。说"接下来请在卡片中选出你们最关注的 Top 3 趋势"。不要列出选项，卡片会自动出现。
+- N-03: 接住用户的趋势排序（主假设 + 两个对冲），简短分析他们的战略判断——为什么把这个趋势排第一？和后两个之间有什么取舍逻辑？然后自然过渡："现在来做一个关键的能力押注——请在卡片中选出你认为孩子最需要的一项核心能力"。不要列出选项。
+注意：N-05（诊断三段论）和 N-07（快照）由前端模板生成，不经过 AI。
 
-### 模块 W（根基）
-- W-01: 解释"家族精神内核"——代代相传的生存哲学。说"请在下方卡片中写一个关键瞬间"。不要重复卡片里的问题。
-- W-03: 基于用户的故事提炼和命名精神内核（如"宁折不弯的信义哲学"），问用户"这个命名准确吗？你觉得还差什么？"
-- W-05: 接住用户的确认/修正，做战略诊断——这套内核在当下是赋能还是约束？然后说"请在下方卡片中写出你们想继承什么、升级成什么"。不要重复卡片里的问题。
-- W-07: 追问升级宣言的可操作性，具体到一个场景（如"下次孩子考了第三名，你们会怎么回应？"）
-- W-09: 汇总生成快照。
+### 模块 W（根基）— 13 节点
+- W-01: 过渡开场。肯定前两个模块的成果，引出"家族精神内核"——代代相传的生存哲学。说"接下来请在卡片中回忆一个关键瞬间"。不要重复卡片里的问题。
+- W-03: 接住用户的故事和归因标签。你的任务是从故事中提取关键词，并从冲突轴库中选 2-3 组最相关的取舍轴。
+  **你必须在回复末尾输出结构化数据，格式：**
+  <!--DATA:{"axes":[{"axis_id":"轴ID","keyword":"从故事提取的关键词"},...],"story_keywords":["关键词1","关键词2"]}-->
+  可用的 axis_id：integrity-vs-result, safety-vs-growth, rules-vs-relations, achievement-vs-balance, obedience-vs-expression, face-vs-authenticity
+  关键词必须来自用户原话，不要编造。最少选 2 组，最多 3 组。
+  回复正文简短接住故事（2-3句），然后说"我帮你把故事翻译成几个取舍点，请在下方卡片中确认"。
+- W-07: 综合用户在 Q1（故事）、Q2（取舍）、Q3（英雄）、Q4（口头禅）的所有数据，提炼 3-5 个"家风内核"候选命名。
+  每个候选必须包含 name（2-4字中性策略命名）、definition（一句话定义）、evidence（引用 Q1-Q4 的具体数据作为依据）。
+  **你必须在回复末尾输出结构化数据，格式：**
+  <!--DATA:{"candidates":[{"name":"命名","definition":"一句话定义","evidence":{"story":"Q1证据","tradeoff":"Q2证据","hero":"Q3证据","quote":"Q4证据"}},...]}>-->
+  回复正文简短总结用户给的信息模式（2-3句），然后说"我提炼了几个候选，请在下方卡片中选择"。
+- W-09: 确认用户选择的命名，引出 flip side。基于用户确认的 core_code，说"每种家风都有正反两面。接下来我们看看这种精神可能的副作用，请在下方卡片中填写"。简短、温暖、不说教。
+注意：W-12（final statement）由前端模板生成，不经过 AI。W 模块快照也由前端模板生成。
 
 ### 模块 E（共识）
 - E-01: 引导做直觉锚定，说"请在下方卡片中凭直觉填写"。不要重复卡片里的问题。
@@ -53,7 +69,7 @@ const SYSTEM_PROMPT = `你是"彼灯教育·家庭愿景工坊"的 AI 导师。
 - E-08: 汇总生成快照。
 
 ### 快照生成规则（必须严格遵守）
-当 nodeId 为 S-07, N-07, W-09, E-08 时，你必须在回复末尾生成快照。格式：
+当 nodeId 为 S-08, E-08 时，你必须在回复末尾生成快照（N、W 模块快照由前端模板生成）。格式：
 <!--SNAPSHOT:快照的完整文字内容-->
 
 这是硬性要求，不可遗漏。快照要有温度，像专业分析报告，100-150字。
@@ -72,7 +88,7 @@ app.post("/api/chat", async (req, res) => {
   // Build system prompt with flow context
   let systemWithContext = SYSTEM_PROMPT;
   if (flowContext) {
-    const snapshotNodes = ["S-07", "N-07", "W-09", "E-08"];
+    const snapshotNodes = ["S-08", "E-08"];
     const mustSnapshot = snapshotNodes.includes(flowContext.nodeId);
     if (mustSnapshot) {
       systemWithContext += `\n\n## 当前上下文\n${JSON.stringify(flowContext, null, 2)}\n\n## ⚠️ 重要指令\n当前节点是 ${flowContext.nodeId}，你必须在回复末尾生成快照。格式：<!--SNAPSHOT:快照内容-->。不要追问，不要提新问题。直接汇总之前所有回答，生成快照。`;
@@ -119,6 +135,280 @@ app.post("/api/chat", async (req, res) => {
       );
       res.end();
     }
+  }
+});
+
+// ═══════════════════════════════════════════════════════════
+//  Report Agent — POST /api/report
+//  Pipeline: Facts → Reasoner (Claude) → Validator → Response
+// ═══════════════════════════════════════════════════════════
+
+const REPORT_SYSTEM_PROMPT = `你是"彼灯教育·家庭战略罗盘"的报告分析师。
+
+## 你的任务
+根据用户在四个模块中的结构化数据（facts），生成两类内容：
+1. **insights**：基于 facts 的可追溯推理
+2. **drafts**：可编辑的建议草案（用户会自行修改）
+
+## 严格规则
+
+### Insights 规则
+- 每条 insight 必须引用具体的 fact IDs（在 based_on 字段）
+- 使用"可能/倾向于/值得关注"等不确定表达
+- 绝不使用"一定/必须/肯定"等断言
+- 不得引入 facts 中不存在的家庭具体细节
+
+### Drafts 规则
+- 每个 draft 必须提供 2-3 个备选版本
+- 绝不使用"你们一定适合/孩子一定会"等硬断言
+- 每个选项应有不同侧重（如偏纪律/偏探索/偏连接）
+
+## 必须生成的内容
+
+### insights（5 条）
+1. **opportunity_match**（机遇匹配 S×N）：家庭资本优势与核心素养的最佳匹配点
+2. **tension_resolve**（矛盾化解 W×N）：家族精神内核与未来需求之间的潜在紧张及化解方向
+3. **philosophy_anchor**（哲学锚定 E×S×W）：价值观方向如何指导资本运用和精神传承
+4. **strength_risk**（优势与风险）：当前家庭定位的最大优势和最大风险
+5. **strategic_summary**（战略整合）：四模块交叉后的一句话战略定位
+
+### drafts（3 个）
+1. **vision_statement**（一句话愿景）：3 个版本，分别偏向不同战略方向
+2. **action_plan_90d**（90天行动计划）：2 个版本，轻量版和强化版
+3. **conversation_scripts**（家庭沟通脚本）：3 个场景的对话模板
+
+## 输出格式
+严格按照 JSON 格式输出，不要包含任何其他文字。`;
+
+/**
+ * Step 1: Assemble facts from compass data
+ */
+function assembleFacts(compassData) {
+  const facts = [];
+  const cd = compassData || {};
+
+  const add = (id, label, tracked, module) => {
+    if (!tracked) {
+      facts.push({ id, label, value: null, source: "user_typed", module });
+      return;
+    }
+    let displayValue;
+    const v = tracked.value;
+    if (Array.isArray(v)) {
+      displayValue = v.join("、");
+    } else if (typeof v === "object" && v !== null) {
+      displayValue = JSON.stringify(v);
+    } else {
+      displayValue = String(v ?? "");
+    }
+    facts.push({ id, label, value: displayValue || null, source: tracked.source, module });
+  };
+
+  // S
+  if (cd.S?.capitalMatrix) {
+    const rows = cd.S.capitalMatrix.value || [];
+    for (const row of rows) {
+      add(`S.capital_${row.label}`, `${row.label}`, { value: `${row.level}${row.keyword ? `（${row.keyword}）` : ""}`, source: cd.S.capitalMatrix.source }, "S");
+    }
+  } else {
+    add("S.capitalMatrix", "家庭资本矩阵", null, "S");
+  }
+  add("S.capitalRationale", "评估逻辑", cd.S?.capitalRationale, "S");
+  add("S.priorityUpgrade", "优先升级资本", cd.S?.priorityUpgrade, "S");
+
+  // N
+  add("N.trendsRanked", "趋势判断 Top 3", cd.N?.trendsRanked, "N");
+  add("N.coreAbility", "能力押注", cd.N?.coreAbility, "N");
+  add("N.insightExplain", "趋势洞察", cd.N?.insightExplain, "N");
+  add("N.insightConnect", "家底关联", cd.N?.insightConnect, "N");
+  add("N.insightGap", "现状差距", cd.N?.insightGap, "N");
+
+  // W
+  add("W.story", "情感地标故事", cd.W?.story, "W");
+  add("W.storyPriorityTag", "故事归因", cd.W?.storyPriorityTag, "W");
+  add("W.heroTraits", "英雄基因", cd.W?.heroTraits, "W");
+  add("W.coreCode", "家风内核", cd.W?.coreCode ? {
+    value: `${cd.W.coreCode.value?.name}（${cd.W.coreCode.value?.definition}）${cd.W.coreCode.value?.userEdited ? " [用户改写]" : ""}`,
+    source: cd.W.coreCode.source,
+  } : null, "W");
+  add("W.flipsideBenefit", "家风好处", cd.W?.flipsideBenefit, "W");
+  add("W.flipsideCost", "家风代价", cd.W?.flipsideCost, "W");
+  add("W.finalStatement", "升级宣言", cd.W?.finalStatement, "W");
+
+  // E
+  add("E.anchors", "直觉锚点", cd.E?.anchors ? {
+    value: `最希望拥有「${cd.E.anchors.value?.gift_to_child}」，最怕缺少「${cd.E.anchors.value?.fear_child_lacks}」`,
+    source: cd.E.anchors.source,
+  } : null, "E");
+  add("E.coreValues", "核心价值观", cd.E?.coreValues, "E");
+  add("E.deferredValues", "战略暂缓", cd.E?.deferredValues, "E");
+  add("E.direction", "战略方向", cd.E?.direction, "E");
+
+  return facts;
+}
+
+/**
+ * Step 3: Validate the report output (warn mode)
+ */
+function validateReport(facts, insights, drafts) {
+  const warnings = [];
+  const factIds = new Set(facts.map((f) => f.id));
+
+  // Check: insights must reference valid fact IDs
+  for (const insight of insights) {
+    if (!insight.based_on || insight.based_on.length === 0) {
+      warnings.push({
+        rule: "insight_no_reference",
+        detail: `Insight "${insight.id}" 没有引用任何 fact`,
+        severity: "warn",
+      });
+    } else {
+      for (const ref of insight.based_on) {
+        if (!factIds.has(ref)) {
+          warnings.push({
+            rule: "insight_invalid_reference",
+            detail: `Insight "${insight.id}" 引用了不存在的 fact "${ref}"`,
+            severity: "warn",
+          });
+        }
+      }
+    }
+
+    // Check for forbidden assertions
+    const forbidden = ["一定", "必须", "肯定", "孩子一定", "你们一定", "家庭一定"];
+    for (const word of forbidden) {
+      if (insight.content.includes(word)) {
+        warnings.push({
+          rule: "insight_hard_assertion",
+          detail: `Insight "${insight.id}" 包含硬断言"${word}"`,
+          severity: "warn",
+        });
+      }
+    }
+  }
+
+  // Check: drafts must have 2+ options
+  for (const draft of drafts) {
+    if (!draft.options || draft.options.length < 2) {
+      warnings.push({
+        rule: "draft_insufficient_options",
+        detail: `Draft "${draft.id}" 只有 ${draft.options?.length || 0} 个选项（需要至少 2 个）`,
+        severity: "warn",
+      });
+    }
+  }
+
+  // Check: missing facts should not appear filled in insights
+  const missingFactIds = facts.filter((f) => f.value === null).map((f) => f.id);
+  for (const insight of insights) {
+    for (const ref of (insight.based_on || [])) {
+      if (missingFactIds.includes(ref)) {
+        warnings.push({
+          rule: "insight_uses_missing_fact",
+          detail: `Insight "${insight.id}" 引用了缺失的 fact "${ref}"`,
+          severity: "warn",
+        });
+      }
+    }
+  }
+
+  return warnings;
+}
+
+app.post("/api/report", async (req, res) => {
+  const { compassData } = req.body;
+
+  if (!compassData) {
+    return res.status(400).json({ error: "compassData is required" });
+  }
+
+  try {
+    // Step 1: Assemble facts
+    const facts = assembleFacts(compassData);
+
+    // Check if we have enough data
+    const filledFacts = facts.filter((f) => f.value !== null);
+    if (filledFacts.length < 3) {
+      return res.status(400).json({
+        error: "数据不足，至少需要完成 2 个模块才能生成报告",
+        facts,
+      });
+    }
+
+    // Step 2: Call Claude for insights + drafts
+    const factsJson = JSON.stringify(facts, null, 2);
+    const userPrompt = `以下是用户在家庭愿景工坊中的结构化数据（facts）：
+
+\`\`\`json
+${factsJson}
+\`\`\`
+
+请根据这些 facts 生成 insights 和 drafts。严格按以下 JSON 格式输出：
+
+{
+  "insights": [
+    {
+      "id": "opportunity_match",
+      "title": "机遇匹配（S×N）",
+      "content": "...",
+      "based_on": ["S.xxx", "N.xxx"],
+      "confidence": "high|medium|low"
+    },
+    ...共 5 条
+  ],
+  "drafts": [
+    {
+      "id": "vision_statement",
+      "title": "一句话愿景",
+      "description": "整合四模块的教育战略宣言",
+      "options": [
+        { "label": "版本A：偏xxx", "content": "..." },
+        { "label": "版本B：偏xxx", "content": "..." },
+        { "label": "版本C：偏xxx", "content": "..." }
+      ]
+    },
+    ...共 3 个
+  ]
+}
+
+只输出 JSON，不要任何其他文字。`;
+
+    const response = await anthropic.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 4096,
+      system: REPORT_SYSTEM_PROMPT,
+      messages: [{ role: "user", content: userPrompt }],
+    });
+
+    // Parse Claude's response
+    const rawText = response.content[0]?.text || "{}";
+    // Extract JSON from potential markdown code blocks
+    const jsonMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, rawText];
+    let parsed;
+    try {
+      parsed = JSON.parse(jsonMatch[1].trim());
+    } catch {
+      console.error("Failed to parse Claude report response:", rawText.slice(0, 500));
+      return res.status(500).json({ error: "报告生成失败：AI 返回格式异常" });
+    }
+
+    const insights = parsed.insights || [];
+    const drafts = parsed.drafts || [];
+
+    // Step 3: Validate
+    const warnings = validateReport(facts, insights, drafts);
+
+    // Return full report
+    res.json({
+      facts,
+      insights,
+      drafts,
+      warnings,
+      generated_at: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Report generation error:", error);
+    res.status(500).json({ error: "报告生成失败" });
   }
 });
 

@@ -8,27 +8,51 @@ const copy = {
   joinWaitlist: { zh: "加入等候名单", en: "Join Waitlist" },
   logIn: { zh: "登录", en: "Log in" },
 
+  // Landing hero
+  heroLine1: { zh: "为你家定个性化战略", en: "A Personalized Strategy for Your Family" },
+  heroLine2: { zh: "用战略咨询的方法做一遍家庭教育。", en: "Apply strategic consulting methods to family education." },
+  heroDesc: { zh: "30天共创：对齐目标与路径，建立执行机制，交付一份家庭教育战略白皮书。", en: "30-day co-creation: align goals and paths, build execution systems, deliver a family education strategy white paper." },
+  heroStart: { zh: "现在开始", en: "Get Started" },
+
   // Login card
-  loginTitle: { zh: "登录", en: "Log in" },
-  loginSubtitle: { zh: "输入信息以开始使用", en: "Enter your details to get started." },
+  loginTitle: { zh: "登录", en: "Welcome Back" },
+  loginSubtitle: { zh: "输入信息以开始使用", en: "Sign in to continue your journey" },
   phone: { zh: "手机号", en: "Phone" },
   email: { zh: "邮箱", en: "Email" },
   password: { zh: "密码", en: "Password" },
   code: { zh: "验证码", en: "Code" },
   phonePlaceholder: { zh: "请输入手机号", en: "Enter phone number" },
   codePlaceholder: { zh: "6 位验证码", en: "6-digit code" },
-  passwordPlaceholder: { zh: "请输入密码", en: "Enter password" },
+  passwordPlaceholder: { zh: "请输入密码", en: "Enter your password" },
   getCode: { zh: "获取验证码", en: "Get code" },
   resend: { zh: "重新发送", en: "Resend" },
-  loginCta: { zh: "登录", en: "Log in" },
-  or: { zh: "或", en: "OR" },
+  loginCta: { zh: "登录", en: "Sign In" },
+  loginNotice: { zh: "目前暂时只支持邮箱登录", en: "Currently only email login is supported" },
+  or: { zh: "或", en: "or" },
   wechatLogin: { zh: "微信登录", en: "WeChat Login" },
+  wechatUnavailable: { zh: "该功能还在开放当中", en: "This feature is coming soon" },
   noAccount: { zh: "还没有账号？", en: "Don't have an account?" },
   signUp: { zh: "立即注册", en: "Sign up" },
   agreePre: { zh: "登录即表示同意", en: "By logging in you agree to our" },
   terms: { zh: "用户协议", en: "Terms" },
   and: { zh: "和", en: "and" },
   privacy: { zh: "隐私政策", en: "Privacy" },
+
+  // Signup
+  signupTitle: { zh: "注册", en: "Create Account" },
+  signupSubtitle: { zh: "创建账号以开始使用", en: "Sign up to get started" },
+  name: { zh: "姓名", en: "Name" },
+  namePlaceholder: { zh: "请输入姓名", en: "Enter your name" },
+  confirmPassword: { zh: "确认密码", en: "Confirm Password" },
+  confirmPasswordPlaceholder: { zh: "请再次输入密码", en: "Confirm your password" },
+  signupCta: { zh: "注册", en: "Sign Up" },
+  signupAgree: { zh: "注册即表示您同意我们的服务条款和隐私政策", en: "By signing up, you agree to our Terms and Privacy Policy" },
+  hasAccount: { zh: "已有账号？", en: "Already have an account?" },
+  goLogin: { zh: "立即登录", en: "Sign in" },
+
+  // Email verification
+  verifyEmailTitle: { zh: "请查收验证邮件", en: "Check Your Email" },
+  verifyEmailDesc: { zh: "我们已向您的邮箱发送了一封验证邮件，请点击邮件中的链接完成注册。", en: "We've sent a verification link to your email. Please click the link to complete your registration." },
 
   // Right side — compass
   compassN: { zh: "N - 眼光", en: "N - Vision" },

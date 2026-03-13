@@ -1,4 +1,5 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import ChatArea from "@/components/workspace/ChatArea";
 import RightRail from "@/components/workspace/RightRail";
 import TopBanner from "@/components/workspace/TopBanner";
@@ -8,8 +9,28 @@ import {
   ResizableHandle,
 } from "@/components/ui/resizable";
 import { sendChatMessage, type ChatMessage } from "@/lib/api";
+import { Plus, X, Search } from "lucide-react";
 import { FLOW, type CardNode } from "@/lib/flow";
-import { generateNotes, type Note, type OpenLoop } from "@/lib/notes";
+import { buildMemo, type Note } from "@/lib/notes";
+import { useAuth } from "@/lib/auth";
+import {
+  listConversations,
+  createConversation,
+  updateConversation,
+  loadMessages,
+  saveMessage,
+  saveCompassData,
+  loadCompassData,
+  type Conversation,
+} from "@/lib/data-client";
+import {
+  type CompassDataSchema,
+  updateCompassFromCard,
+  generateSnapshotFromFields,
+  field,
+} from "@/lib/compass-schema";
+import { getDomainHint, generateDiagnostic } from "@/lib/n-diagnostic";
+import { renderAxisLabels, buildFinalStatement, buildWSnapshot } from "@/lib/w-templates";
 
 export type StepId = "step1" | "step2" | "step3" | "step4";
 export type PhaseId = "collect" | "deepen" | "confirm";
@@ -47,9 +68,21 @@ export interface Message {
 const STEP_MAP: Record<number, StepId> = { 0: "step1", 1: "step2", 2: "step3", 3: "step4" };
 
 const Workspace = () => {
+  const navigate = useNavigate();
+  const { user, signOut } = useAuth();
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [isAiTyping, setIsAiTyping] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
+
+  // Persistence state
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [loadingConversation, setLoadingConversation] = useState(true);
+  const conversationIdRef = useRef<string | null>(null);
+  const [drawerCompassMap, setDrawerCompassMap] = useState<Record<string, CompassDataSchema>>({});
 
   // Flow state
   const [currentModule, setCurrentModule] = useState(0); // index into FLOW
@@ -59,10 +92,16 @@ const Workspace = () => {
   const [snapshots, setSnapshots] = useState<Record<string, string>>({});
   const [started, setStarted] = useState(false);
   const [familyCode, setFamilyCode] = useState("");
+  const [introShown, setIntroShown] = useState(false);
 
-  // Live Notes state
+  // Structured compass data (source of truth for PDF)
+  const compassDataRef = useRef<CompassDataSchema>({});
+  // Counter to trigger re-renders when compassData changes (ref doesn't trigger)
+  const [compassVersion, setCompassVersion] = useState(0);
+  const bumpCompass = () => setCompassVersion((v) => v + 1);
+
+  // Consulting memo state — rebuilt from compass_data at milestones
   const [notes, setNotes] = useState<Note[]>([]);
-  const [openLoops, setOpenLoops] = useState<OpenLoop[]>([]);
 
   // Refs to avoid stale closures in async callbacks
   const currentModuleRef = useRef(currentModule);
@@ -72,6 +111,7 @@ const Workspace = () => {
   const messagesRef = useRef(messages);
   const startedRef = useRef(started);
   const familyCodeRef = useRef(familyCode);
+  const completedModulesRef = useRef(completedModules);
   currentModuleRef.current = currentModule;
   currentNodeRef.current = currentNode;
   moduleDataRef.current = moduleData;
@@ -79,30 +119,236 @@ const Workspace = () => {
   messagesRef.current = messages;
   startedRef.current = started;
   familyCodeRef.current = familyCode;
+  completedModulesRef.current = completedModules;
+
+  conversationIdRef.current = conversationId;
+
+  // ─── Single init: load existing conversation OR create new one ───
+  useEffect(() => {
+    if (!user) {
+      setLoadingConversation(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const convos = await listConversations();
+        if (cancelled) return;
+        setConversations(convos);
+
+        if (convos.length > 0) {
+          // Load the most recent active conversation
+          const latest = convos[0];
+          setConversationId(latest.id);
+          conversationIdRef.current = latest.id;
+          setFamilyCode(latest.family_code);
+          setCurrentModule(latest.current_module);
+          currentModuleRef.current = latest.current_module;
+          setCurrentNode(latest.current_node);
+          currentNodeRef.current = latest.current_node;
+          setStarted(latest.started);
+          startedRef.current = latest.started;
+          // Restore completed modules: all modules before current are done
+          const restored = Array.from({ length: latest.current_module }, (_, i) => i);
+          setCompletedModules(restored);
+
+          // Load compass data
+          const cd = await loadCompassData(latest.id);
+          if (cancelled) return;
+          if (cd) { compassDataRef.current = cd as CompassDataSchema; bumpCompass(); }
+
+          const rawMsgs = await loadMessages(latest.id);
+          if (cancelled) return;
+
+          // Deduplicate: keep only the first welcome message and first family-code card
+          const msgs = deduplicateMessages(rawMsgs);
+
+          if (msgs.length > 0) {
+            lastSavedCountRef.current = msgs.length; // track deduped count, not raw
+            setMessages(msgs);
+          } else {
+            // Conversation exists but no messages — add welcome
+            setMessages(createWelcomeMessages());
+          }
+
+          // Rebuild notes from compass_data (scoped to current module)
+          if (compassDataRef.current && Object.keys(compassDataRef.current).length > 0) {
+            setNotes(buildMemo(compassDataRef.current, latest.current_module, restored));
+          }
+        } else {
+          // No conversations — create a new one
+          const convo = await createConversation("", "新对话");
+          if (cancelled) return;
+          setConversationId(convo.id);
+          conversationIdRef.current = convo.id;
+          setMessages(createWelcomeMessages());
+        }
+      } catch (err) {
+        console.error("Failed to initialize:", err);
+      } finally {
+        if (!cancelled) setLoadingConversation(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [user]);
+
+  // Auto-persist new messages as they're added
+  const lastSavedCountRef = useRef(0);
+  useEffect(() => {
+    const cid = conversationIdRef.current;
+    if (!cid || loadingConversation) return;
+
+    const newMsgs = messages.slice(lastSavedCountRef.current);
+    if (newMsgs.length === 0) return;
+
+    lastSavedCountRef.current = messages.length;
+
+    // Save each new message (fire-and-forget)
+    for (const msg of newMsgs) {
+      saveMessage(cid, msg).catch((err) =>
+        console.error("Failed to save message:", err)
+      );
+    }
+  }, [messages, loadingConversation]);
+
+  // Auto-sync flow state when key values change
+  useEffect(() => {
+    const cid = conversationIdRef.current;
+    if (!cid || loadingConversation) return;
+
+    updateConversation(cid, {
+      current_module: currentModule,
+      current_node: currentNode,
+      started,
+      family_code: familyCode,
+    }).catch((err) => console.error("Failed to sync flow state:", err));
+  }, [currentModule, currentNode, started, familyCode, loadingConversation]);
+
+  // ─── History: load a different conversation ───
+  const handleLoadConversation = useCallback(async (convo: Conversation) => {
+    setShowHistory(false);
+    setConversationId(convo.id);
+    conversationIdRef.current = convo.id;
+    setFamilyCode(convo.family_code);
+    familyCodeRef.current = convo.family_code;
+    setCurrentModule(convo.current_module);
+    currentModuleRef.current = convo.current_module;
+    setCurrentNode(convo.current_node);
+    currentNodeRef.current = convo.current_node;
+    setStarted(convo.started);
+    startedRef.current = convo.started;
+    setIntroShown(false);
+    setModuleData({});
+    setNotes([]);
+    // openLoops removed — memo system handles state
+    // Restore completed modules: all modules before current are done
+    const restored = Array.from({ length: convo.current_module }, (_, i) => i);
+    setCompletedModules(restored);
+    compassDataRef.current = {};
+    bumpCompass();
+
+    try {
+      const [rawMsgs, cd] = await Promise.all([
+        loadMessages(convo.id),
+        loadCompassData(convo.id),
+      ]);
+      if (cd) { compassDataRef.current = cd as CompassDataSchema; bumpCompass(); }
+      const msgs = deduplicateMessages(rawMsgs);
+      lastSavedCountRef.current = msgs.length;
+      setMessages(msgs.length > 0 ? msgs : createWelcomeMessages());
+
+      // Rebuild notes from compass_data (scoped to current module)
+      if (compassDataRef.current && Object.keys(compassDataRef.current).length > 0) {
+        setNotes(buildMemo(compassDataRef.current, convo.current_module, restored));
+      }
+    } catch (err) {
+      console.error("Failed to load messages:", err);
+      lastSavedCountRef.current = 0;
+      setMessages(createWelcomeMessages());
+    }
+  }, []);
+
+  // ─── Welcome messages helper ───
+  const createWelcomeMessages = (): Message[] => [
+    { role: "ai", content: "欢迎来到家庭愿景工坊。\n\n接下来我会引导你完成四个模块的思考，最终生成一份《家庭战略定位罗盘》。整个过程大约 20-30 分钟。", timestamp: new Date() },
+    { role: "ai", content: "", timestamp: new Date(), cardType: "family-code" },
+  ];
+
+  // ─── Deduplicate messages from DB (fix for legacy duplicated data) ───
+  const deduplicateMessages = (msgs: Message[]): Message[] => {
+    let seenWelcome = false;
+    let seenFamilyCode = false;
+    return msgs.filter((m) => {
+      // Deduplicate welcome messages (AI message starting with "欢迎来到家庭愿景工坊")
+      if (m.role === "ai" && !m.cardType && m.content.startsWith("欢迎来到家庭愿景工坊")) {
+        if (seenWelcome) return false;
+        seenWelcome = true;
+        return true;
+      }
+      // Deduplicate family-code cards
+      if (m.cardType === "family-code") {
+        if (seenFamilyCode) return false;
+        seenFamilyCode = true;
+        return true;
+      }
+      return true;
+    });
+  };
+
+  // ─── New conversation ───
+  const handleNewConversation = useCallback(async (code?: string) => {
+    if (!user) return;
+    try {
+      const convo = await createConversation(code || "", code ? `${code} 家庭愿景` : "新对话");
+      setConversationId(convo.id);
+      conversationIdRef.current = convo.id;
+      setFamilyCode(code || "");
+      setCurrentModule(0);
+      setCurrentNode(0);
+      setStarted(false);
+      setIntroShown(false);
+      lastSavedCountRef.current = 0;
+      setModuleData({});
+      setCompletedModules([]);
+      setSnapshots({});
+      setNotes([]);
+      // openLoops removed — memo system handles state
+      setMessages(createWelcomeMessages());
+      // Refresh conversation list
+      const convos = await listConversations();
+      setConversations(convos);
+    } catch (err) {
+      console.error("Failed to create conversation:", err);
+    }
+  }, [user]);
+
+  // ─── Logout ───
+  const handleLogout = useCallback(async () => {
+    await signOut();
+    navigate("/login");
+  }, [signOut, navigate]);
 
   // Accumulated data from all modules for cross-module analysis
   const allDataRef = useRef<Record<string, Record<string, unknown>>>({});
   // Capital matrix rows — passed from capital-matrix card to capital-summary card
   const capitalRowsRef = useRef<{ label: string; level: string; keyword: string }[]>([]);
 
-  // Notes helpers
-  const addNotes = useCallback((moduleId: string, cardType: string, data: unknown) => {
-    const newNotes = generateNotes(moduleId, cardType, data);
-    setNotes((prev) => [...prev, ...newNotes]);
-    // Auto-create open loop for pending notes
-    const pendingNotes = newNotes.filter((n) => n.status === "pending");
-    if (pendingNotes.length > 0) {
-      setOpenLoops((prev) => [
-        ...prev,
-        {
-          id: `loop_${Date.now()}`,
-          moduleId,
-          description: pendingNotes[0].bullet,
-          nodeIndex: currentNodeRef.current,
-          resolved: false,
-        },
-      ]);
-    }
+  /**
+   * Rebuild memo from compass_data. Only called at milestones:
+   * - Card confirm (compass_data updated)
+   * - Family code edit
+   * - Session restore
+   * NOT called on every keystroke / chat message.
+   */
+  const rebuildMemo = useCallback(() => {
+    setNotes(buildMemo(
+      compassDataRef.current,
+      currentModuleRef.current,
+      completedModulesRef.current,
+    ));
   }, []);
 
   const handleUpdateNote = useCallback((id: string, updates: Partial<Note>) => {
@@ -113,16 +359,6 @@ const Workspace = () => {
 
   const handleDeleteNote = useCallback((id: string) => {
     setNotes((prev) => prev.filter((n) => n.id !== id));
-  }, []);
-
-  const handleResolveLoop = useCallback((id: string) => {
-    setOpenLoops((prev) =>
-      prev.map((l) => (l.id === id ? { ...l, resolved: true } : l))
-    );
-  }, []);
-
-  const handleNavigateToLoop = useCallback((_loop: OpenLoop) => {
-    // Future: scroll to / highlight the relevant question in chat
   }, []);
 
   const currentStep = STEP_MAP[currentModule] || "step1";
@@ -238,7 +474,9 @@ const Workspace = () => {
               fullContent += parsed.text;
               const visibleText = fullContent
                 .replace(/<!--SNAPSHOT:.*?-->/s, "")
-                .replace(/<!--SNAPSHOT:.*/s, "");
+                .replace(/<!--SNAPSHOT:.*/s, "")
+                .replace(/<!--DATA:.*?-->/s, "")
+                .replace(/<!--DATA:.*/s, "");
               setStreamingContent(visibleText);
             }
           } catch { /* skip */ }
@@ -251,9 +489,21 @@ const Workspace = () => {
       if (snapshotMatch) {
         snapshotContent = snapshotMatch[1].trim();
       }
+
+      // Parse structured data if present (for W-03 axes, W-07 candidates, etc.)
+      let structuredData: unknown;
+      const dataMatch = fullContent.match(/<!--DATA:(.*?)-->/s);
+      if (dataMatch) {
+        try {
+          structuredData = JSON.parse(dataMatch[1].trim());
+        } catch { /* ignore malformed DATA */ }
+      }
+
       const cleanContent = fullContent
         .replace(/<!--SNAPSHOT:.*?-->/s, "")
         .replace(/<!--SNAPSHOT:.*/s, "")
+        .replace(/<!--DATA:.*?-->/s, "")
+        .replace(/<!--DATA:.*/s, "")
         .trim();
 
       const aiMsg: Message = {
@@ -267,7 +517,7 @@ const Workspace = () => {
       setIsAiTyping(false);
 
       // After AI message, advance to next node using the CURRENT refs (not stale closure)
-      advanceNode(snapshotContent);
+      advanceNode(snapshotContent, structuredData);
     } catch (error) {
       setMessages((prev) => [
         ...prev,
@@ -278,7 +528,7 @@ const Workspace = () => {
     }
   }, [getFlowContext]);
 
-  const advanceNode = (snapshotContent?: string) => {
+  const advanceNode = (snapshotContent?: string, structuredData?: unknown) => {
     const mod = currentModuleRef.current;
     const curNode = currentNodeRef.current;
     const nextNode = curNode + 1;
@@ -299,6 +549,46 @@ const Workspace = () => {
           : "快照内容生成中，请确认后继续。";
       }
 
+      // For ability-select card: inject AI hint based on top trend
+      let abilityHint: string | undefined;
+      if (next.cardType === "ability-select") {
+        const topTrend = compassDataRef.current.N?.trendsRanked?.value?.[0];
+        if (topTrend) abilityHint = getDomainHint(topTrend);
+      }
+
+      // For tradeoff-choice card: render axes from AI DATA + template library
+      let tradeoffAxes: { axisId: string; labelA: string; labelB: string }[] | undefined;
+      if (next.cardType === "tradeoff-choice" && structuredData) {
+        const sd = structuredData as { axes?: { axis_id: string; keyword?: string }[] };
+        if (sd.axes) {
+          tradeoffAxes = sd.axes
+            .map((a) => {
+              const rendered = renderAxisLabels(a.axis_id, a.keyword);
+              return rendered ? { axisId: a.axis_id, labelA: rendered.labelA, labelB: rendered.labelB } : null;
+            })
+            .filter(Boolean) as { axisId: string; labelA: string; labelB: string }[];
+        }
+      }
+
+      // For core-code-confirm card: pass AI candidates
+      let candidates: unknown[] | undefined;
+      if (next.cardType === "core-code-confirm" && structuredData) {
+        const sd = structuredData as { candidates?: unknown[] };
+        candidates = sd.candidates;
+      }
+
+      // For flipside-fill card: inject coreCodeName
+      let coreCodeName: string | undefined;
+      if (next.cardType === "flipside-fill" || next.cardType === "upgrade-path") {
+        coreCodeName = compassDataRef.current.W?.coreCode?.value?.name;
+      }
+
+      // For upgrade-path card: inject flipsideCost
+      let flipsideCost: string | undefined;
+      if (next.cardType === "upgrade-path") {
+        flipsideCost = compassDataRef.current.W?.flipsideCost?.value;
+      }
+
       const cardMsg: Message = {
         role: "ai",
         content: "",
@@ -309,6 +599,11 @@ const Workspace = () => {
           ...(next.cardType === "snapshot" && resolvedSnapshotContent
             ? { content: resolvedSnapshotContent }
             : {}),
+          ...(abilityHint ? { aiHint: abilityHint } : {}),
+          ...(tradeoffAxes ? { axes: tradeoffAxes } : {}),
+          ...(candidates ? { candidates } : {}),
+          ...(coreCodeName ? { coreCodeName } : {}),
+          ...(flipsideCost ? { flipsideCost } : {}),
         },
       };
       setMessages((prev) => [...prev, cardMsg]);
@@ -319,19 +614,41 @@ const Workspace = () => {
   };
 
   const handleCardConfirm = useCallback((cardType: string, data: unknown) => {
-    // Family code card — special pre-flow handling
+    // Family code card — special handling
     if (cardType === "family-code") {
       const code = data as string;
+      const oldCode = familyCodeRef.current;
+      const isReEdit = startedRef.current && oldCode;
+
       setFamilyCode(code);
       familyCodeRef.current = code;
+
+      // Write to compass data
+      compassDataRef.current = { ...compassDataRef.current, familyCode: field(code, "user_typed") };
+      bumpCompass();
+
+      if (isReEdit) {
+        // Re-edit: update DB, rebuild memo, show confirmation
+        rebuildMemo();
+        if (conversationIdRef.current) {
+          updateConversation(conversationIdRef.current, { family_code: code }).catch(console.error);
+          saveCompassData(conversationIdRef.current, compassDataRef.current as Record<string, unknown>).catch(console.error);
+        }
+        setMessages((prev) => [
+          ...prev,
+          { role: "ai", content: `家庭代号已从「${oldCode}」更新为「${code}」`, timestamp: new Date() },
+        ]);
+        return;
+      }
+
+      // First-time: start the flow
       setStarted(true);
       startedRef.current = true;
-      addNotes("_", "family-code", code);
+      rebuildMemo();
       setMessages((prev) => [
         ...prev,
         { role: "user", content: `家庭代号：${code}`, timestamp: new Date() },
       ]);
-      // Request first AI message (S-01)
       setTimeout(() => requestAIMessage(code), 300);
       return;
     }
@@ -343,9 +660,21 @@ const Workspace = () => {
     const dataKey = `${FLOW[mod]?.id}_${curNode}_${cardType}`;
     setModuleData((prev) => ({ ...prev, [dataKey]: data }));
 
-    // Generate live notes
     const moduleId = FLOW[mod]?.id || "_";
-    addNotes(moduleId, cardType, data);
+
+    // ── Accumulate structured compass data + persist ──
+    compassDataRef.current = updateCompassFromCard(
+      compassDataRef.current, moduleId, cardType, curNode, data,
+    );
+    bumpCompass();
+    // Rebuild memo at this milestone (card confirm)
+    rebuildMemo();
+    if (conversationIdRef.current) {
+      saveCompassData(
+        conversationIdRef.current,
+        compassDataRef.current as Record<string, unknown>,
+      ).catch((err) => console.error("Failed to save compass data:", err));
+    }
 
     // Add user message summarizing the card data
     let summary = "";
@@ -379,40 +708,42 @@ const Workspace = () => {
       } else {
         summary = `不太对：${result.reason || ""}${result.detail ? `（${result.detail}）` : ""}`;
       }
-    } else if (cardType === "opt-in") {
-      const result = data as { optedIn: boolean };
-      if (result.optedIn) {
-        summary = "我愿意进一步思考";
-      } else {
-        summary = "跳过深挖，直接继续";
-        // Skip the deep-dive node (next node) — jump 2 nodes ahead
-        setMessages((prev) => [
-          ...prev,
-          { role: "user", content: summary, timestamp: new Date() },
-        ]);
-        const skipNode = curNode + 2; // skip deep-dive, land on priority-select
-        currentNodeRef.current = skipNode;
-        setCurrentNode(skipNode);
-        const targetNode = FLOW[mod]?.nodes[skipNode];
-        if (targetNode?.type === "card") {
-          const cardMsg: Message = {
-            role: "ai",
-            content: "",
-            timestamp: new Date(),
-            cardType: (targetNode as CardNode).cardType,
-            cardProps: { ...(targetNode as CardNode).cardProps },
-          };
-          setMessages((prev) => [...prev, cardMsg]);
-        }
-        return;
-      }
-    } else if (cardType === "deep-dive") {
-      const answers = data as { option: string; comment: string }[];
-      summary = answers.map((a) => `${a.option}${a.comment ? `（${a.comment}）` : ""}`).join("；");
     } else if (cardType === "single-select" || cardType === "priority-select") {
       summary = `我选择优先升级：${data}`;
-    } else if (cardType === "agree-disagree" || cardType === "spirit-upgrade") {
+    } else if (cardType === "agree-disagree") {
+      const d = data as { agreed: boolean; reason?: string };
+      if (d.agreed) {
+        summary = "同意";
+      } else {
+        summary = `不同意：${d.reason || ""}`;
+      }
+    } else if (cardType === "spirit-upgrade") {
       summary = data as string;
+    } else if (cardType === "trend-rank") {
+      const ranked = data as string[];
+      summary = `趋势判断：${ranked[0]}（主假设）、${ranked[1]}（对冲）、${ranked[2]}（对冲）`;
+    } else if (cardType === "ability-select") {
+      summary = `能力押注：${data as string}`;
+    } else if (cardType === "story-input") {
+      const d = data as { story: string; priorityTag?: string };
+      summary = d.story + (d.priorityTag ? `（最在意：${d.priorityTag}）` : "");
+    } else if (cardType === "tradeoff-choice") {
+      const choices = data as { axisId: string; labelA: string; labelB: string; choice: "A" | "B" }[];
+      summary = choices.map((c) => c.choice === "A" ? c.labelA : c.labelB).join("；");
+    } else if (cardType === "hero-select") {
+      summary = `英雄基因：${(data as string[]).join("、")}`;
+    } else if (cardType === "quote-fill") {
+      const d = data as { childhood: string; now: string; themeTag?: string };
+      summary = `小时候听到：「${d.childhood}」；现在常说：「${d.now}」${d.themeTag ? `（保护：${d.themeTag}）` : ""}`;
+    } else if (cardType === "core-code-confirm") {
+      const d = data as { name: string; definition: string; userEdited?: boolean };
+      summary = `家风内核：${d.name}（${d.definition}）${d.userEdited ? " [已改写]" : ""}`;
+    } else if (cardType === "flipside-fill") {
+      const d = data as { tags: string[]; example: string; benefit: string; cost: string };
+      summary = `副作用：${d.tags.join("、")}；好处：${d.benefit}；代价：${d.cost}`;
+    } else if (cardType === "upgrade-path") {
+      const d = data as { keep: string; reduce: string; from: string; to: string };
+      summary = `保留「${d.keep}」，从「${d.from}」→「${d.to}」，减少「${d.reduce}」`;
     } else if (cardType === "tag-select") {
       summary = `我选择：${(data as string[]).join("、")}`;
     } else if (cardType === "keyword-fill") {
@@ -444,6 +775,17 @@ const Workspace = () => {
         setTimeout(() => requestAIMessage(summary), 300);
         return;
       }
+
+      // All 4 modules complete — show congratulations
+      setMessages((prev) => [
+        ...prev,
+        { role: "user", content: summary, timestamp: new Date() },
+        {
+          role: "ai",
+          content: "恭喜你们完成了全部四个模块的探索！🎉\n\n你们已经梳理了**家底**、审视了**眼光**、挖掘了**根基**、达成了**共识**。\n\n现在可以点击右侧的「导出家庭罗盘」，生成你们的专属 **《家庭战略定位罗盘》** 报告。",
+          timestamp: new Date(),
+        },
+      ]);
       return;
     } else if (cardType === "value-gallery") {
       const d = data as { core: string[]; deferred: string[] };
@@ -462,6 +804,139 @@ const Workspace = () => {
     setCurrentNode(nextNode);
 
     const nextFlowNode = FLOW[mod]?.nodes[nextNode];
+
+    // ── N module template-based nodes ──
+    // N-05 (index 4): diagnostic three-part template after ability-select
+    if (moduleId === "N" && nextNode === 4) {
+      const cd = compassDataRef.current;
+      const topTrend = cd.N?.trendsRanked?.value?.[0] || "";
+      const coreAbility = cd.N?.coreAbility?.value || "";
+      const capitalMatrix = cd.S?.capitalMatrix?.value;
+      const priorityUpgrade = cd.S?.priorityUpgrade?.value;
+
+      const diag = generateDiagnostic({ topTrend, coreAbility, capitalMatrix, priorityUpgrade });
+
+      // Store diagnostic insights in compass data
+      compassDataRef.current = {
+        ...compassDataRef.current,
+        N: {
+          ...compassDataRef.current.N,
+          insightExplain: field(diag.explain, "template_based"),
+          insightConnect: field(diag.connect, "template_based"),
+          insightGap: field(diag.gap, "template_based"),
+        },
+      };
+      bumpCompass();
+      if (conversationIdRef.current) {
+        saveCompassData(conversationIdRef.current, compassDataRef.current as Record<string, unknown>).catch(console.error);
+      }
+
+      const diagText = `**趋势洞察**\n${diag.explain}\n\n**家底关联**\n${diag.connect}\n\n**现状差距**\n${diag.gap}\n\n你觉得这个分析准确吗？`;
+      const aiMsg: Message = { role: "ai", content: diagText, timestamp: new Date() };
+      setMessages((prev) => [...prev, aiMsg]);
+
+      // Advance to N-06 (agree-disagree card)
+      const n06 = nextNode + 1;
+      currentNodeRef.current = n06;
+      setCurrentNode(n06);
+      const n06Node = FLOW[mod]?.nodes[n06];
+      if (n06Node?.type === "card") {
+        const cardMsg: Message = {
+          role: "ai", content: "", timestamp: new Date(),
+          cardType: (n06Node as CardNode).cardType,
+          cardProps: { ...(n06Node as CardNode).cardProps },
+        };
+        setMessages((prev) => [...prev, cardMsg]);
+      }
+      return;
+    }
+
+    // N-07 (index 6): template snapshot after agree-disagree
+    if (moduleId === "N" && nextNode === 6) {
+      const snapshotText = generateSnapshotFromFields(compassDataRef.current, "N");
+
+      compassDataRef.current = {
+        ...compassDataRef.current,
+        N: {
+          ...compassDataRef.current.N,
+          snapshot: field(snapshotText, "template_based"),
+        },
+      };
+      bumpCompass();
+      rebuildMemo(); // N snapshot milestone — triggers insights
+      if (conversationIdRef.current) {
+        saveCompassData(conversationIdRef.current, compassDataRef.current as Record<string, unknown>).catch(console.error);
+      }
+
+      const aiMsg: Message = { role: "ai", content: "好的，我来帮你整理一下这个模块的要点。", timestamp: new Date() };
+      setMessages((prev) => [...prev, aiMsg]);
+
+      const n08 = nextNode + 1;
+      currentNodeRef.current = n08;
+      setCurrentNode(n08);
+      const n08Node = FLOW[mod]?.nodes[n08];
+      if (n08Node?.type === "card") {
+        const cardMsg: Message = {
+          role: "ai", content: "", timestamp: new Date(),
+          cardType: (n08Node as CardNode).cardType,
+          cardProps: { ...(n08Node as CardNode).cardProps, content: snapshotText },
+        };
+        setMessages((prev) => [...prev, cardMsg]);
+      }
+      return;
+    }
+
+    // ── W module template-based nodes ──
+    // W-12 (index 11): final statement template after upgrade-path
+    if (moduleId === "W" && nextNode === 11) {
+      const cd = compassDataRef.current;
+      const stmt = buildFinalStatement({
+        coreCodeName: cd.W?.coreCode?.value?.name || "",
+        keep: cd.W?.upgradeKeep?.value || "",
+        from: cd.W?.upgradeFrom?.value || "",
+        to: cd.W?.upgradeTo?.value || "",
+        reduce: cd.W?.upgradeReduce?.value || "",
+      });
+
+      // Store final statement + snapshot
+      const snapshotText = generateSnapshotFromFields(cd, "W");
+      compassDataRef.current = {
+        ...compassDataRef.current,
+        W: {
+          ...compassDataRef.current.W,
+          finalStatement: field(stmt, "template_based"),
+          snapshot: field(snapshotText, "template_based"),
+        },
+      };
+      bumpCompass();
+      rebuildMemo(); // W snapshot milestone — triggers insights
+      if (conversationIdRef.current) {
+        saveCompassData(conversationIdRef.current, compassDataRef.current as Record<string, unknown>).catch(console.error);
+      }
+
+      const aiMsg: Message = {
+        role: "ai",
+        content: `好的，根据你的所有回答，我帮你拼出了升级宣言：\n\n**${stmt}**\n\n下面是完整的根基快照，请确认。`,
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, aiMsg]);
+
+      // Advance to W-13 (snapshot card)
+      const w13 = nextNode + 1;
+      currentNodeRef.current = w13;
+      setCurrentNode(w13);
+      const w13Node = FLOW[mod]?.nodes[w13];
+      if (w13Node?.type === "card") {
+        const cardMsg: Message = {
+          role: "ai", content: "", timestamp: new Date(),
+          cardType: (w13Node as CardNode).cardType,
+          cardProps: { ...(w13Node as CardNode).cardProps, content: snapshotText },
+        };
+        setMessages((prev) => [...prev, cardMsg]);
+      }
+      return;
+    }
+
     if (nextFlowNode?.type === "ai") {
       // Next is AI — request response
       setTimeout(() => requestAIMessage(summary), 300);
@@ -479,8 +954,84 @@ const Workspace = () => {
   }, [requestAIMessage]);
 
   const handleSendMessage = useCallback(async (content: string) => {
+    // Pre-flow special actions
+    if (content === "##INTRO##") {
+      setIntroShown(true);
+      setMessages((prev) => [
+        ...prev,
+        { role: "user", content: "能先帮我介绍一下这个流程吗？", timestamp: new Date() },
+        {
+          role: "ai",
+          content: "当然可以！\n\n整个工坊分为 **四个模块**，大约需要 20-30 分钟：\n\n**模块一 · 我们的家底（S）** — 梳理家庭现有的资源和优势\n**模块二 · 我们的眼光（N）** — 分析外部环境和未来趋势\n**模块三 · 我们的根基（W）** — 挖掘家族的底层价值观\n**模块四 · 我们的共识（E）** — 对齐教育方向和底线\n\n每个模块我会通过对话和互动卡片引导你思考，最后生成一份 **《家庭战略定位罗盘》**。",
+          timestamp: new Date(),
+        },
+      ]);
+      return;
+    }
+
+    if (content === "##START##" || content === "##GOTO_CODE##") {
+      // Scroll to and focus the family code card input, with visual highlight
+      setTimeout(() => {
+        const card = document.querySelector<HTMLElement>(".max-w-md");
+        const input = card?.querySelector<HTMLInputElement>("input");
+        if (card && input) {
+          card.scrollIntoView({ behavior: "smooth", block: "center" });
+          // Brief highlight effect
+          card.style.transition = "box-shadow 0.3s";
+          card.style.boxShadow = "0 0 0 2px hsl(var(--primary))";
+          input.focus();
+          setTimeout(() => { card.style.boxShadow = ""; }, 1500);
+        }
+      }, 100);
+      return;
+    }
+
     if (!startedRef.current) {
-      // Flow not started yet — family code card must be confirmed first
+      return;
+    }
+
+    // ── Detect family code update intent ──
+    // Matches patterns like:
+    //   家庭代号=Harvey / 家庭代号＝Harvey
+    //   代号改成Harvey / 代号改为Harvey / 代号换成Harvey
+    //   家庭代号应该是Harvey / 代号应该是Harvey
+    //   代号写错了，应该是Harvey / 代号不对，是Harvey
+    //   改成Harvey / 换成Harvey (only when short + looks like a code)
+    const CODE_PATTERNS = [
+      /(?:家庭)?代号\s*[=＝]\s*(.{1,12})$/,
+      /(?:家庭)?代号\s*(?:改成|改为|换成|更新为|更改为)\s*(.{1,12})$/,
+      /(?:家庭)?代号\s*(?:应该|应当)是\s*(.{1,12})$/,
+      /(?:家庭)?代号\s*(?:写错了|不对|错了)[，,]?\s*(?:应该是|是|改成)?\s*(.{1,12})$/,
+      /(?:应该是|其实是|正确的是)\s*(.{1,12})$/,
+    ];
+    let detectedCode: string | null = null;
+    for (const pattern of CODE_PATTERNS) {
+      const m = content.trim().match(pattern);
+      if (m) { detectedCode = m[1].trim(); break; }
+    }
+    // Last pattern ("应该是X") is ambiguous — only treat as code update
+    // if the value looks like a short code (≤6 chars, no spaces, no punctuation)
+    if (detectedCode && content.trim().match(/^(?:应该是|其实是|正确的是)/)) {
+      if (detectedCode.length > 6 || /[\s，。！？,.!?]/.test(detectedCode)) {
+        detectedCode = null; // too long or has punctuation → not a code update
+      }
+    }
+    if (detectedCode && detectedCode.length >= 1 && !/\s/.test(detectedCode)) {
+      const oldCode = familyCodeRef.current;
+      setFamilyCode(detectedCode);
+      familyCodeRef.current = detectedCode;
+      compassDataRef.current = { ...compassDataRef.current, familyCode: field(detectedCode, "user_typed") };
+      bumpCompass();
+      rebuildMemo();
+      if (conversationIdRef.current) {
+        updateConversation(conversationIdRef.current, { family_code: detectedCode }).catch(console.error);
+        saveCompassData(conversationIdRef.current, compassDataRef.current as Record<string, unknown>).catch(console.error);
+      }
+      setMessages((prev) => [
+        ...prev,
+        { role: "user", content, timestamp: new Date() },
+        { role: "ai", content: `家庭代号已从「${oldCode}」更新为「${detectedCode}」`, timestamp: new Date() },
+      ]);
       return;
     }
 
@@ -490,12 +1041,24 @@ const Workspace = () => {
       { role: "user", content, timestamp: new Date() },
     ]);
 
-    // Generate note for free-text answer
-    const moduleIdForNote = FLOW[currentModuleRef.current]?.id || "_";
-    addNotes(moduleIdForNote, "user-text", content);
-
-    // Advance past the user node
+    // Save user free-text responses to compass_data
     const mod = currentModuleRef.current;
+    const moduleId = FLOW[mod]?.id;
+    const nodeIdx = currentNodeRef.current;
+
+    // S-05: user explains capital assessment rationale (node index 4)
+    if (moduleId === "S" && nodeIdx === 4) {
+      if (!compassDataRef.current.S) compassDataRef.current.S = {};
+      compassDataRef.current.S.capitalRationale = field(content, "user_typed");
+      bumpCompass();
+      if (conversationIdRef.current) {
+        saveCompassData(
+          conversationIdRef.current,
+          compassDataRef.current as Record<string, unknown>,
+        ).catch((err) => console.error("Failed to save S.capitalRationale:", err));
+      }
+    }
+    // Advance past the user node
     const curNode = currentNodeRef.current;
     const nextNode = curNode + 1;
     currentNodeRef.current = nextNode;
@@ -525,28 +1088,14 @@ const Workspace = () => {
     }
   };
 
-  // Initialize with welcome message + family code card
-  if (messages.length === 0) {
-    const welcomeMsg: Message = {
-      role: "ai",
-      content: "欢迎来到家庭愿景工坊。\n\n接下来我会引导你完成四个模块的思考，最终生成一份《家庭战略定位罗盘》。整个过程大约 20-30 分钟。",
-      timestamp: new Date(),
-    };
-    const codeCard: Message = {
-      role: "ai",
-      content: "",
-      timestamp: new Date(),
-      cardType: "family-code" as Message["cardType"],
-    };
-    setMessages([welcomeMsg, codeCard]);
-  }
+  // (init logic merged into the single mount effect above)
 
   return (
     <div className="h-full flex flex-col overflow-hidden bg-background">
       <TopBanner />
       <div className="flex-1 flex overflow-hidden px-6 py-4">
         <ResizablePanelGroup direction="horizontal" className="gap-0">
-          <ResizablePanel defaultSize={70} minSize={50}>
+          <ResizablePanel defaultSize={65} minSize={50}>
             <div className="flex flex-col min-w-0 min-h-0 h-full rounded-xl bg-background">
               <ChatArea
                 messages={messages}
@@ -562,16 +1111,43 @@ const Workspace = () => {
                 onStepClick={handleStepClick}
                 stepGuide={started ? "输入你的回答..." : "请先在上方确认家庭代号"}
                 completedPhaseCount={completedModules.length * 3 + (currentPhase === "collect" ? 0 : currentPhase === "deepen" ? 1 : 2)}
-                totalPhases={12}
+                totalPhases={STEPS.length * 3}
                 hasUserReplied={hasUserReplied}
                 isAiTyping={isAiTyping}
                 streamingContent={streamingContent}
                 onCardConfirm={handleCardConfirm}
+                familyCodeConfirmed={started}
+                familyCode={familyCode}
+                introShown={introShown}
+                onShowHistory={() => {
+                  // Open drawer IMMEDIATELY — data loads inside with loading state
+                  setShowHistory(true);
+                  setLoadingHistory(true);
+                  listConversations()
+                    .then((convos) => {
+                      setConversations(convos);
+                      setLoadingHistory(false);
+                      // Load compass data in background — don't block drawer
+                      const cdMap: Record<string, CompassDataSchema> = {};
+                      Promise.allSettled(
+                        convos.map((c) =>
+                          loadCompassData(c.id).then((cd) => {
+                            if (cd) cdMap[c.id] = cd as CompassDataSchema;
+                          })
+                        )
+                      ).then(() => setDrawerCompassMap(cdMap));
+                    })
+                    .catch((err) => {
+                      console.error("Failed to refresh conversations:", err);
+                      setLoadingHistory(false);
+                    });
+                }}
+                onLogout={handleLogout}
               />
             </div>
           </ResizablePanel>
           <ResizableHandle className="w-px mx-3 my-8 bg-border/50 rounded-full transition-all duration-200 hover:bg-primary/40 hover:w-[3px] hover:mx-[11px] active:bg-primary/60 active:w-[3px] data-[resize-handle-active]:bg-primary/60 data-[resize-handle-active]:w-[3px]" />
-          <ResizablePanel defaultSize={30} minSize={20} maxSize={45}>
+          <ResizablePanel defaultSize={35} minSize={20} maxSize={45}>
             <div className="h-full overflow-y-auto bg-background">
               <RightRail
                 currentStep={currentStep}
@@ -579,20 +1155,284 @@ const Workspace = () => {
                 completedSteps={completedSteps}
                 completedPhases={completedPhases}
                 steps={STEPS}
-                onExport={() => window.open("/compass", "_blank")}
+                onExport={() => window.open(`/compass?cid=${conversationId || ""}`, "_blank")}
                 notes={notes}
-                openLoops={openLoops}
                 onUpdateNote={handleUpdateNote}
                 onDeleteNote={handleDeleteNote}
-                onResolveLoop={handleResolveLoop}
                 started={started}
               />
             </div>
           </ResizablePanel>
         </ResizablePanelGroup>
       </div>
+
+      {/* History drawer overlay */}
+      {showHistory && (
+        <HistoryDrawer
+          conversations={conversations}
+          currentId={conversationId}
+          compassDataMap={drawerCompassMap}
+          onSelect={handleLoadConversation}
+          onNewChat={() => {
+            setShowHistory(false);
+            handleNewConversation(familyCode || undefined);
+          }}
+          onClose={() => setShowHistory(false)}
+          onLogout={handleLogout}
+          loading={loadingHistory}
+        />
+      )}
     </div>
   );
 };
+
+// ─── History Drawer Component ────────────────────────
+
+const MODULE_NAMES = ["家底", "眼光", "根基", "共识"];
+
+function getSmartTitle(convo: Conversation, cd?: CompassDataSchema): string {
+  const code = convo.family_code;
+
+  if (cd) {
+    // Priority 1: direction × coreAbility · familyCode
+    const dir = cd.E?.direction?.value;
+    const ability = cd.N?.coreAbility?.value;
+    if (dir && ability?.length) {
+      return `${dir} × ${ability[0]}${code ? ` · ${code}` : ""}`;
+    }
+
+    // Priority 2: trend → coreAbility · familyCode
+    const trend = cd.N?.trends?.value;
+    if (trend?.length && ability?.length) {
+      return `${trend[0]} → ${ability[0]}${code ? ` · ${code}` : ""}`;
+    }
+
+    // Priority 3: coreValues · familyCode
+    const values = cd.E?.coreValues?.value;
+    if (values?.length) {
+      const short = values.slice(0, 3).join("、");
+      return `价值观：${short}${code ? ` · ${code}` : ""}`;
+    }
+  }
+
+  // Fallback
+  if (!convo.started) {
+    return `愿景工坊（未开始）${code ? ` · ${code}` : ""}`;
+  }
+  return convo.title || `愿景工坊${code ? ` · ${code}` : ""}`;
+}
+
+function getStatusText(convo: Conversation, cd?: CompassDataSchema): string {
+  if (!convo.started) return "未开始 · 等待确认家庭代号";
+
+  const moduleIndex = convo.current_module;
+  const moduleName = MODULE_NAMES[moduleIndex] || "未知";
+
+  // If all 4 modules complete
+  if (moduleIndex >= 3 && cd?.E?.snapshot) {
+    return "已完成 · 罗盘已生成";
+  }
+
+  return `进行中 · 第 ${moduleIndex + 1}/4 步：${moduleName}`;
+}
+
+function formatTime(dateStr: string, full = false): string {
+  const d = new Date(dateStr);
+  if (full) {
+    return d.toLocaleDateString("zh-CN", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+  return `更新于 ${d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}`;
+}
+
+function HistoryDrawer({
+  conversations,
+  currentId,
+  compassDataMap,
+  onSelect,
+  onNewChat,
+  onClose,
+  onLogout,
+  loading,
+}: {
+  conversations: Conversation[];
+  currentId: string | null;
+  compassDataMap: Record<string, CompassDataSchema>;
+  onSelect: (convo: Conversation) => void;
+  onNewChat: () => void;
+  onClose: () => void;
+  onLogout: () => void;
+  loading?: boolean;
+}) {
+  const [search, setSearch] = useState("");
+  const [showSearch, setShowSearch] = useState(false);
+
+  const query = search.trim().toLowerCase();
+  const filtered = query
+    ? conversations.filter((c) => {
+        const title = getSmartTitle(c, compassDataMap[c.id]).toLowerCase();
+        const code = (c.family_code || "").toLowerCase();
+        const date = new Date(c.updated_at).toLocaleDateString("zh-CN");
+        return title.includes(query) || code.includes(query) || date.includes(query);
+      })
+    : conversations;
+
+  // Split into active (current) vs history
+  const active = filtered.find((c) => c.id === currentId);
+  const history = filtered.filter((c) => c.id !== currentId);
+
+  return (
+    <>
+      <div
+        className="fixed inset-0 bg-black/30 z-40"
+        onClick={onClose}
+      />
+      <div className="fixed left-0 top-0 bottom-0 w-80 bg-background border-r border-border z-50 flex flex-col animate-slide-in-left">
+        {/* Header */}
+        <div className="px-5 pt-4 pb-3 border-b border-border">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-[15px] font-medium">历史对话</h2>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setShowSearch(!showSearch)}
+                className={`p-1.5 rounded-md transition-colors ${showSearch ? "text-foreground bg-muted" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}
+                title="搜索"
+              >
+                <Search size={15} />
+              </button>
+              <button onClick={onClose} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
+                <X size={15} />
+              </button>
+            </div>
+          </div>
+
+          {/* New Chat button */}
+          <button
+            onClick={onNewChat}
+            className="w-full flex items-center justify-center gap-1.5 text-[13px] font-medium bg-foreground text-background rounded-lg px-3 py-2 hover:opacity-90 transition-opacity"
+          >
+            <Plus size={14} />
+            新建愿景对话
+          </button>
+
+          {/* Search input */}
+          {showSearch && (
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="搜索标题、代号、日期..."
+              autoFocus
+              className="w-full mt-2.5 text-[12.5px] bg-secondary/50 border border-border rounded-lg px-3 py-1.5 outline-none focus:ring-1 focus:ring-primary/30 placeholder:text-muted-foreground/50"
+            />
+          )}
+        </div>
+
+        {/* List */}
+        <div className="flex-1 overflow-y-auto">
+          {loading ? (
+            <p className="text-[13px] text-muted-foreground px-5 py-8 text-center animate-pulse">
+              加载中…
+            </p>
+          ) : filtered.length === 0 ? (
+            <p className="text-[13px] text-muted-foreground px-5 py-8 text-center">
+              {query ? "无匹配结果" : "暂无历史对话"}
+            </p>
+          ) : (
+            <>
+              {/* Active / 继续进行 */}
+              {active && (
+                <>
+                  <div className="px-5 pt-3 pb-1">
+                    <p className="text-[10.5px] font-semibold text-muted-foreground tracking-wide">继续进行（1）</p>
+                  </div>
+                  <ConvoItem
+                    convo={active}
+                    cd={compassDataMap[active.id]}
+                    isCurrent
+                    onClick={() => onSelect(active)}
+                  />
+                </>
+              )}
+
+              {/* History / 历史记录 */}
+              {history.length > 0 && (
+                <>
+                  <div className="flex items-center justify-between px-5 pt-3 pb-1">
+                    <p className="text-[10.5px] font-semibold text-muted-foreground tracking-wide">
+                      历史记录（{history.length}）
+                    </p>
+                    <button
+                      onClick={onNewChat}
+                      className="text-[10.5px] text-muted-foreground hover:text-foreground transition-colors flex items-center gap-0.5"
+                    >
+                      <Plus size={11} />
+                      新建对话
+                    </button>
+                  </div>
+                  {history.map((convo) => (
+                    <ConvoItem
+                      key={convo.id}
+                      convo={convo}
+                      cd={compassDataMap[convo.id]}
+                      isCurrent={false}
+                      onClick={() => onSelect(convo)}
+                    />
+                  ))}
+                </>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Bottom: logout */}
+        <div className="px-5 py-3 border-t border-border">
+          <button
+            onClick={onLogout}
+            className="w-full text-[12.5px] text-muted-foreground hover:text-foreground py-2 rounded-lg hover:bg-secondary/50 transition-colors"
+          >
+            退出登录
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function ConvoItem({
+  convo,
+  cd,
+  isCurrent,
+  onClick,
+}: {
+  convo: Conversation;
+  cd?: CompassDataSchema;
+  isCurrent: boolean;
+  onClick: () => void;
+}) {
+  const title = getSmartTitle(convo, cd);
+  const status = getStatusText(convo, cd);
+  const time = isCurrent
+    ? formatTime(convo.updated_at)
+    : formatTime(convo.updated_at, true);
+
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full text-left px-5 py-3 border-b border-border/40 hover:bg-secondary/50 transition-colors ${
+        isCurrent ? "bg-secondary/60" : ""
+      }`}
+    >
+      <div className="text-[13px] font-medium truncate">{title}</div>
+      <div className="text-[11px] text-muted-foreground/70 mt-0.5 truncate">{status}</div>
+      <div className="text-[10.5px] text-muted-foreground/50 mt-0.5">{time}</div>
+    </button>
+  );
+}
 
 export default Workspace;

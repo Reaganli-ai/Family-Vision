@@ -36,8 +36,9 @@ const ProgressPanel = ({
   });
   const [showExportConfirm, setShowExportConfirm] = useState(false);
 
-  const completionPercent = Math.round((completedSteps.length / 4) * 100);
-  const allComplete = completedSteps.length === 4;
+  const totalSteps = steps.length;
+  const completionPercent = Math.round((completedSteps.length / totalSteps) * 100);
+  const allComplete = completedSteps.length === totalSteps;
 
   const getExpanded = (stepId: StepId) => {
     if (stepId === currentStep) return true;
@@ -151,7 +152,7 @@ const ProgressPanel = ({
             {/* Completion bar */}
             <div className="flex items-center justify-between text-[11px] text-muted-foreground mb-1">
               <span>已完成 {completionPercent}%</span>
-              <span>{completedSteps.length}/4 步骤</span>
+              <span>{completedSteps.length}/{totalSteps} 步骤</span>
             </div>
             <div className="w-full h-1 bg-border/40 rounded-full overflow-hidden mb-2.5">
               <div
@@ -203,7 +204,7 @@ const ProgressPanel = ({
                 <DialogHeader>
                   <DialogTitle className="text-[15px]">还没完成哦</DialogTitle>
                   <DialogDescription className="text-[13px] leading-relaxed pt-1">
-                    你的罗盘目前完成了 {completionPercent}%，还有 {4 - completedSteps.length} 个步骤未完成。要不要继续完善？
+                    你的罗盘目前完成了 {completionPercent}%，还有 {totalSteps - completedSteps.length} 个步骤未完成。要不要继续完善？
                   </DialogDescription>
                 </DialogHeader>
                 <div className="flex gap-2 pt-2">

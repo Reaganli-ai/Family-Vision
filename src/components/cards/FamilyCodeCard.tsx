@@ -1,17 +1,26 @@
-import { useState } from "react";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { ChevronDown, ChevronUp, Pencil, Check, X } from "lucide-react";
 
 interface Props {
   onConfirm: (code: string) => void;
   disabled?: boolean;
+  /** Pre-fill value when re-editing */
+  confirmedValue?: string;
 }
 
 const EXAMPLES = ["LC", "MJ", "李陈家", "SunnyFamily", "WZ"];
 
-const FamilyCodeCard = ({ onConfirm, disabled }: Props) => {
-  const [value, setValue] = useState("");
+const FamilyCodeCard = ({ onConfirm, disabled, confirmedValue }: Props) => {
+  const [value, setValue] = useState(confirmedValue || "");
   const [showAlt, setShowAlt] = useState(false);
   const [error, setError] = useState("");
+  const [editing, setEditing] = useState(false);
+  const editInputRef = useRef<HTMLInputElement>(null);
+
+  // Sync confirmedValue when it changes externally
+  useEffect(() => {
+    if (confirmedValue && !editing) setValue(confirmedValue);
+  }, [confirmedValue, editing]);
 
   const validate = (v: string): string => {
     const trimmed = v.trim();
@@ -35,11 +44,80 @@ const FamilyCodeCard = ({ onConfirm, disabled }: Props) => {
     if (error) setError(validate(v));
   };
 
+  // ── Inline edit mode (when card is disabled/confirmed) ──
+  const startEdit = () => {
+    setEditing(true);
+    setTimeout(() => editInputRef.current?.focus(), 50);
+  };
+
+  const saveEdit = () => {
+    const err = validate(value);
+    if (err) {
+      setError(err);
+      return;
+    }
+    setEditing(false);
+    setError("");
+    onConfirm(value.trim());
+  };
+
+  const cancelEdit = () => {
+    setValue(confirmedValue || "");
+    setEditing(false);
+    setError("");
+  };
+
   if (disabled) {
     return (
-      <div className="bg-card rounded-xl border border-border p-5 opacity-70">
+      <div className="bg-card rounded-xl border border-border p-5 opacity-80">
         <p className="text-[13px] font-semibold text-foreground mb-1">为你的家庭取一个代号</p>
-        <p className="text-[13px] text-completed font-medium">{value || "已确认"}</p>
+        {editing ? (
+          <div className="flex items-center gap-2 mt-2">
+            <input
+              ref={editInputRef}
+              value={value}
+              onChange={(e) => handleChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") saveEdit();
+                if (e.key === "Escape") cancelEdit();
+              }}
+              maxLength={12}
+              className={`flex-1 border rounded-lg px-3 py-2 text-[14px] outline-none transition-colors ${
+                error
+                  ? "border-red-400 focus:ring-1 focus:ring-red-300"
+                  : "border-border focus:ring-1 focus:ring-primary/30 focus:border-primary/40"
+              }`}
+            />
+            <button
+              onClick={saveEdit}
+              className="p-1.5 rounded-lg text-completed hover:bg-completed/10 transition-colors"
+              title="保存"
+            >
+              <Check size={16} />
+            </button>
+            <button
+              onClick={cancelEdit}
+              className="p-1.5 rounded-lg text-muted-foreground hover:bg-secondary transition-colors"
+              title="取消"
+            >
+              <X size={16} />
+            </button>
+            {error && <p className="text-[11px] text-red-500">{error}</p>}
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <p className="text-[13px] text-completed font-medium">
+              {confirmedValue || value || "已确认"}
+            </p>
+            <button
+              onClick={startEdit}
+              className="p-1 rounded text-muted-foreground/50 hover:text-foreground transition-colors"
+              title="修改代号"
+            >
+              <Pencil size={12} />
+            </button>
+          </div>
+        )}
       </div>
     );
   }

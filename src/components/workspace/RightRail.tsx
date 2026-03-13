@@ -7,9 +7,11 @@ import {
   Trash2,
   Star,
   X,
-  AlertCircle,
+  Lightbulb,
   ChevronDown,
   ChevronUp,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import {
   Dialog,
@@ -19,7 +21,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import type { StepId, StepInfo, PhaseId } from "@/pages/Workspace";
-import { PHASE_LABELS } from "@/pages/Workspace";
+import { PHASE_LABELS, STEPS } from "@/pages/Workspace";
 import type { Note, OpenLoop } from "@/lib/notes";
 
 // ═══════════════════════════════════════════════════════════
@@ -35,12 +37,10 @@ interface Props {
   steps: StepInfo[];
   // B) Export
   onExport: () => void;
-  // C) Live Notes
+  // C) Consulting Memo
   notes: Note[];
-  openLoops: OpenLoop[];
   onUpdateNote: (id: string, updates: Partial<Note>) => void;
   onDeleteNote: (id: string) => void;
-  onResolveLoop: (id: string) => void;
   started: boolean;
 }
 
@@ -59,7 +59,6 @@ const MODULE_LABELS: Record<string, string> = {
 
 function ProgressSection({
   currentStep,
-  currentPhase,
   completedSteps,
   completedPhases,
   steps,
@@ -70,23 +69,6 @@ function ProgressSection({
   completedPhases: Record<StepId, PhaseId[]>;
   steps: StepInfo[];
 }) {
-  const [expandedSteps, setExpandedSteps] = useState<Record<StepId, boolean>>({
-    step1: false,
-    step2: false,
-    step3: false,
-    step4: false,
-  });
-
-  const getExpanded = (stepId: StepId) => {
-    if (stepId === currentStep) return true;
-    return expandedSteps[stepId] ?? false;
-  };
-
-  const toggleStep = (stepId: StepId) => {
-    if (stepId === currentStep) return;
-    setExpandedSteps((prev) => ({ ...prev, [stepId]: !prev[stepId] }));
-  };
-
   const getStepIcon = (stepId: StepId) => {
     const isCompleted = completedSteps.includes(stepId);
     const isCurrent = currentStep === stepId;
@@ -103,72 +85,32 @@ function ProgressSection({
           const completed = completedPhases[step.id] || [];
           const isCompleted = completedSteps.includes(step.id);
           const isCurrent = currentStep === step.id;
-          const isExpanded = getExpanded(step.id);
 
           return (
-            <div key={step.id}>
-              <button
-                onClick={() => toggleStep(step.id)}
-                className={`w-full flex items-center gap-2.5 px-2 py-2 rounded-lg text-[13px] transition-colors ${
-                  isCurrent
-                    ? "text-foreground font-medium bg-secondary/40"
-                    : isCompleted
-                    ? "text-foreground/80 hover:bg-secondary/30"
-                    : "text-disabled"
-                }`}
-              >
-                {getStepIcon(step.id)}
-                <span className="flex-1 text-left">
-                  Step {step.id.replace("step", "")} {step.label}
-                </span>
-                {isCurrent && (
-                  <span className="text-[10px] text-primary font-medium">当前</span>
-                )}
-                <div className="flex items-center gap-2">
-                  <span className={`text-[11px] ${isCompleted ? "text-completed" : "text-muted-foreground"}`}>
-                    {completed.length}/{PHASES.length}
-                  </span>
-                  {(isCurrent || isCompleted) && (
-                    <div className="w-12 h-1.5 bg-border/50 rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all duration-300"
-                        style={{
-                          width: `${(completed.length / PHASES.length) * 100}%`,
-                          backgroundColor: isCompleted ? 'hsl(var(--completed))' : 'hsl(var(--primary))',
-                        }}
-                      />
-                    </div>
-                  )}
-                </div>
-              </button>
-
-              {isExpanded && (
-                <div className="ml-7 pl-3 border-l border-border/60 space-y-0.5 py-1 mb-1">
-                  {PHASES.map((phase) => {
-                    const isDone = completed.includes(phase);
-                    const isActive = isCurrent && currentPhase === phase && !isDone;
-                    return (
-                      <div
-                        key={phase}
-                        className={`flex items-center gap-2 py-1.5 text-[12px] ${
-                          isActive
-                            ? "text-primary font-medium"
-                            : isDone
-                            ? "text-completed"
-                            : "text-disabled"
-                        }`}
-                      >
-                        {isDone ? (
-                          <span className="w-1.5 h-1.5 rounded-full bg-completed inline-block" />
-                        ) : isActive ? (
-                          <span className="w-1.5 h-1.5 rounded-full bg-primary inline-block" />
-                        ) : (
-                          <span className="w-1.5 h-1.5 rounded-full bg-disabled inline-block" />
-                        )}
-                        <span>{PHASE_LABELS[phase]}</span>
-                      </div>
-                    );
-                  })}
+            <div
+              key={step.id}
+              className={`flex items-center gap-2.5 px-2 py-2 rounded-lg text-[13px] transition-colors ${
+                isCurrent
+                  ? "text-foreground font-medium bg-secondary/40"
+                  : isCompleted
+                  ? "text-foreground/80"
+                  : "text-disabled"
+              }`}
+            >
+              {getStepIcon(step.id)}
+              <span className="flex-1 text-left">{step.label}</span>
+              {isCurrent && (
+                <span className="text-[10px] text-primary font-medium">当前</span>
+              )}
+              {(isCurrent || isCompleted) && (
+                <div className="w-12 h-1.5 bg-border/50 rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full transition-all duration-300"
+                    style={{
+                      width: `${(completed.length / PHASES.length) * 100}%`,
+                      backgroundColor: isCompleted ? 'hsl(var(--completed))' : 'hsl(var(--primary))',
+                    }}
+                  />
                 </div>
               )}
             </div>
@@ -192,8 +134,9 @@ function ExportSection({
 }) {
   const [showDialog, setShowDialog] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
-  const completionPercent = Math.round((completedSteps.length / 4) * 100);
-  const allComplete = completedSteps.length === 4;
+  const totalSteps = STEPS.length;
+  const completionPercent = Math.round((completedSteps.length / totalSteps) * 100);
+  const allComplete = completedSteps.length === totalSteps;
 
   return (
     <div className="bg-card rounded-xl border border-border px-3 py-2.5">
@@ -209,7 +152,7 @@ function ExportSection({
         <div className="px-1">
           <div className="flex items-center justify-between text-[11px] text-muted-foreground mb-1">
             <span>已完成 {completionPercent}%</span>
-            <span>{completedSteps.length}/4 步骤</span>
+            <span>{completedSteps.length}/{totalSteps} 步骤</span>
           </div>
           <div className="w-full h-1 bg-border/40 rounded-full overflow-hidden mb-2.5">
             <div
@@ -244,7 +187,7 @@ function ExportSection({
               <DialogHeader>
                 <DialogTitle className="text-[15px]">还没完成哦</DialogTitle>
                 <DialogDescription className="text-[13px] leading-relaxed pt-1">
-                  你的罗盘目前完成了 {completionPercent}%，还有 {4 - completedSteps.length} 个步骤未完成。要不要继续完善？
+                  你的罗盘目前完成了 {completionPercent}%，还有 {totalSteps - completedSteps.length} 个步骤未完成。要不要继续完善？
                 </DialogDescription>
               </DialogHeader>
               <div className="flex gap-2 pt-2">
@@ -267,7 +210,7 @@ function ExportSection({
 //  C) NotesSection + NoteItem
 // ═══════════════════════════════════════════════════════════
 
-function NoteItem({
+function FactItem({
   note,
   onUpdate,
   onDelete,
@@ -297,20 +240,11 @@ function NoteItem({
   };
 
   return (
-    <div
-      className={`group relative rounded-lg px-2.5 py-1.5 transition-colors ${
-        note.isHighlight
-          ? "bg-amber-50 border border-amber-200/60"
-          : "bg-secondary/30 border border-transparent"
-      } ${note.status === "pending" ? "border-l-2 border-l-amber-400" : ""}`}
-    >
+    <div className="group relative rounded-lg bg-secondary/30 border border-transparent px-2.5 py-1.5 transition-colors">
       <div className="flex items-center gap-1.5 mb-0.5">
         <span className="text-[9px] text-muted-foreground/50 bg-secondary/50 rounded px-1 py-px">
           {note.sourceLabel}
         </span>
-        {note.status === "pending" && (
-          <span className="text-[9px] text-amber-600 font-medium">待确认</span>
-        )}
       </div>
 
       {editing ? (
@@ -328,20 +262,13 @@ function NoteItem({
           </div>
         </div>
       ) : (
-        <p className={`text-[12px] leading-relaxed ${note.isHighlight ? "text-amber-800 font-semibold" : "text-foreground"}`}>
+        <p className="text-[12px] leading-relaxed text-foreground font-medium">
           {note.bullet}
         </p>
       )}
 
       {!editing && (
         <div className="absolute top-1 right-1 hidden group-hover:flex items-center gap-0.5">
-          <button
-            onClick={() => onUpdate({ isHighlight: !note.isHighlight })}
-            className={`p-0.5 rounded transition-colors ${note.isHighlight ? "text-amber-500 hover:text-amber-600" : "text-muted-foreground/40 hover:text-amber-500"}`}
-            title={note.isHighlight ? "取消重点" : "标记重点"}
-          >
-            <Star size={10} fill={note.isHighlight ? "currentColor" : "none"} />
-          </button>
           <button onClick={() => setEditing(true)} className="p-0.5 rounded text-muted-foreground/40 hover:text-foreground transition-colors" title="编辑">
             <Pencil size={10} />
           </button>
@@ -354,99 +281,84 @@ function NoteItem({
   );
 }
 
-function NotesSection({
+function InsightItem({ note }: { note: Note }) {
+  return (
+    <div className="rounded-lg bg-blue-50/50 border border-blue-200/30 px-2.5 py-1.5">
+      <div className="flex items-center gap-1 mb-0.5">
+        <Lightbulb size={9} className="text-blue-500" />
+        <span className="text-[9px] font-medium text-blue-600">AI解读</span>
+        <span className="text-[9px] text-muted-foreground/40 ml-auto">{note.sourceLabel}</span>
+      </div>
+      <p className="text-[11px] leading-relaxed text-foreground/70">
+        {note.bullet}
+      </p>
+    </div>
+  );
+}
+
+function MemoSection({
   notes,
-  openLoops,
   onUpdateNote,
   onDeleteNote,
-  onResolveLoop,
   started,
 }: {
   notes: Note[];
-  openLoops: OpenLoop[];
   onUpdateNote: (id: string, updates: Partial<Note>) => void;
   onDeleteNote: (id: string) => void;
-  onResolveLoop: (id: string) => void;
   started: boolean;
 }) {
-  const activeLoops = openLoops.filter((l) => !l.resolved);
+  const [showInsights, setShowInsights] = useState(true);
 
-  // Group notes by module
-  const groupedNotes = notes.reduce<Record<string, Note[]>>((acc, note) => {
-    const key = note.moduleId || "_";
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(note);
-    return acc;
-  }, {});
+  const facts = notes.filter((n) => n.noteType === "fact");
+  const insights = notes.filter((n) => n.noteType === "insight");
 
   return (
     <div className="bg-card rounded-xl border border-border p-3">
       <h3 className="text-[13px] font-semibold text-foreground px-1 pt-0.5 pb-1.5 flex items-center gap-1.5">
         <FileText size={13} />
-        实时记录
-        {notes.length > 0 && (
-          <span className="text-[10px] font-normal text-muted-foreground ml-auto">
-            {notes.length} 条
-          </span>
-        )}
+        咨询纪要
       </h3>
 
-      {/* Open Loops inline */}
-      {activeLoops.length > 0 && (
-        <div className="mb-2 px-1">
-          <div className="rounded-lg bg-amber-50/60 border border-amber-200/40 px-2.5 py-2">
-            <p className="text-[10px] font-semibold text-amber-700 flex items-center gap-1 mb-1">
-              <AlertCircle size={10} />
-              待确认 · {activeLoops.length} 项
-            </p>
-            {activeLoops.map((loop) => (
-              <div key={loop.id} className="flex items-center gap-1.5 text-[11px] text-foreground/70 group py-0.5">
-                <span className="w-1 h-1 rounded-full bg-amber-400 flex-shrink-0" />
-                <span className="flex-1 truncate">{loop.description}</span>
-                <button
-                  onClick={() => onResolveLoop(loop.id)}
-                  className="p-0.5 text-muted-foreground/30 hover:text-completed opacity-0 group-hover:opacity-100 transition-opacity"
-                  title="标记已解决"
-                >
-                  <Check size={10} />
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Notes list */}
       <div className="px-1">
         {!started ? (
           <p className="text-[11px] text-muted-foreground/50 py-2">
             完成家庭代号后开始记录
           </p>
-        ) : notes.length === 0 ? (
+        ) : facts.length === 0 ? (
           <p className="text-[11px] text-muted-foreground/50 py-2">
-            你的回答将实时出现在这里
+            你的决策将实时出现在这里
           </p>
         ) : (
-          <div className="space-y-2">
-            {Object.entries(groupedNotes).map(([moduleId, moduleNotes]) => (
-              <div key={moduleId}>
-                {moduleId !== "_" && (
-                  <p className="text-[10px] font-semibold text-muted-foreground tracking-wide mb-1">
-                    {MODULE_LABELS[moduleId] || moduleId}
-                  </p>
-                )}
-                <div className="space-y-1">
-                  {moduleNotes.map((note) => (
-                    <NoteItem
-                      key={note.id}
-                      note={note}
-                      onUpdate={(updates) => onUpdateNote(note.id, updates)}
-                      onDelete={() => onDeleteNote(note.id)}
-                    />
-                  ))}
-                </div>
-              </div>
+          <div className="space-y-1.5">
+            {/* Fact memos */}
+            {facts.map((note) => (
+              <FactItem
+                key={note.id}
+                note={note}
+                onUpdate={(updates) => onUpdateNote(note.id, updates)}
+                onDelete={() => onDeleteNote(note.id)}
+              />
             ))}
+
+            {/* AI Insights (collapsible) */}
+            {insights.length > 0 && (
+              <div className="pt-1">
+                <button
+                  onClick={() => setShowInsights(!showInsights)}
+                  className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors mb-1"
+                >
+                  {showInsights ? <EyeOff size={10} /> : <Eye size={10} />}
+                  {showInsights ? "隐藏" : "显示"} AI 洞察（{insights.length}）
+                </button>
+                {showInsights && (
+                  <div className="space-y-1">
+                    {insights.map((note) => (
+                      <InsightItem key={note.id} note={note} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -480,14 +392,12 @@ const RightRail = (props: Props) => {
         />
       </div>
 
-      {/* C) 实时记录 — always visible, bottom */}
+      {/* C) 咨询纪要 — always visible, bottom */}
       <div className="px-4 pb-4 flex-1 min-h-0">
-        <NotesSection
+        <MemoSection
           notes={props.notes}
-          openLoops={props.openLoops}
           onUpdateNote={props.onUpdateNote}
           onDeleteNote={props.onDeleteNote}
-          onResolveLoop={props.onResolveLoop}
           started={props.started}
         />
       </div>

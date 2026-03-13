@@ -105,26 +105,33 @@ const TagSelectCard = ({
         </button>
       )}
       {allowCustom && showCustom && (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
           <input
             type="text"
+            autoFocus
             value={customTag}
             onChange={(e) => setCustomTag(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && addCustom()}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") {
+                e.preventDefault();
+                addCustom();
+              }
+            }}
             maxLength={30}
             placeholder={customPlaceholder}
-            className="flex-1 bg-secondary/40 rounded-lg px-3 py-1.5 text-[12px] outline-none placeholder:text-muted-foreground/40 focus:ring-1 focus:ring-primary/30"
+            className="flex-1 bg-secondary/40 rounded-lg px-3 py-1.5 text-[12px] outline-none placeholder:text-muted-foreground/40 focus:ring-1 focus:ring-primary/30 border border-border"
           />
           <button
-            onClick={addCustom}
+            onClick={(e) => { e.stopPropagation(); addCustom(); }}
             disabled={!customTag.trim()}
-            className="text-[12px] text-primary font-medium disabled:opacity-40"
+            className="text-[12px] text-primary font-medium disabled:opacity-40 px-2 py-1 rounded hover:bg-primary/10 transition-colors"
           >
             添加
           </button>
           <button
-            onClick={() => { setShowCustom(false); setCustomTag(""); }}
-            className="text-[12px] text-muted-foreground"
+            onClick={(e) => { e.stopPropagation(); setShowCustom(false); setCustomTag(""); }}
+            className="text-[12px] text-muted-foreground px-2 py-1 rounded hover:bg-secondary transition-colors"
           >
             取消
           </button>

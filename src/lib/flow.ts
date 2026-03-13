@@ -1,7 +1,7 @@
 // Conversation flow definition based on PRD
 // Each step has a sequence of nodes: AI message, card, user input
 
-export type CardType = "capital-matrix" | "capital-summary" | "single-select" | "tag-select" | "keyword-fill" | "snapshot" | "short-text" | "value-gallery" | "priority-select" | "agree-disagree" | "spirit-upgrade" | "opt-in" | "deep-dive";
+export type CardType = "capital-matrix" | "capital-summary" | "single-select" | "tag-select" | "keyword-fill" | "snapshot" | "short-text" | "value-gallery" | "priority-select" | "agree-disagree" | "spirit-upgrade" | "trend-rank" | "ability-select" | "story-input" | "tradeoff-choice" | "hero-select" | "quote-fill" | "core-code-confirm" | "flipside-fill" | "upgrade-path";
 
 export interface CardNode {
   type: "card";
@@ -46,36 +46,10 @@ export const FLOW: StepFlow[] = [
         cardType: "capital-summary",
         cardProps: {},
       },
-      {                                         // S-04: 可选深挖
-        type: "card",
-        cardType: "opt-in",
-        cardProps: {
-          title: "想进一步思考吗？",
-          description: "下面有一道关于资本转化的深挖题，帮你看清资源之间的隐藏联系。跳过也不影响后续流程。",
-          confirmText: "我愿意想一想",
-          skipText: "跳过，直接继续",
-        },
-      },
-      // S-05: deep-dive（仅 opt-in 后才显示，由 handleCardConfirm 控制跳过）
-      {
-        type: "card",
-        cardType: "deep-dive",
-        cardProps: {
-          questions: [
-            {
-              question: "你们家的文化资本（阅读、讨论、见识）有没有转化成社会连接？",
-              options: [
-                "有明显转化：通过知识结识了不少人",
-                "有一些但不多：偶尔因此认识新朋友",
-                "几乎没有：阅读讨论主要在家庭内部",
-                "没想过这个角度",
-              ],
-              commentPlaceholder: "比如：因为读书会认识了几个家长……",
-            },
-          ],
-        },
-      },
-      {                                         // S-06: 战略优先级选择
+      { type: "ai" },                          // S-04: AI 追问评估逻辑
+      { type: "user" },                        // S-05: 用户打字阐述逻辑
+      { type: "ai" },                          // S-06: AI 点评 + 过渡到优先级
+      {                                         // S-07: 战略优先级选择
         type: "card",
         cardType: "priority-select",
         cardProps: {
@@ -118,8 +92,8 @@ export const FLOW: StepFlow[] = [
           commentPlaceholder: "比如：我们最近正好在考虑换工作/搬家/让孩子转学……",
         },
       },
-      { type: "ai" },                          // S-07: AI 生成快照内容
-      {                                         // S-08: 快照预览
+      { type: "ai" },                          // S-08: AI 生成快照内容
+      {                                         // S-09: 快照预览
         type: "card",
         cardType: "snapshot",
         cardProps: { title: "你们的家底快照" },
@@ -133,42 +107,26 @@ export const FLOW: StepFlow[] = [
     subtitle: "世界往哪走？",
     nodes: [
       { type: "ai" },                          // N-01: 开场引导
-      {                                         // N-02: 标签选择（趋势）
+      {                                         // N-02: Top 3 趋势排序
         type: "card",
-        cardType: "tag-select",
-        cardProps: {
-          question: "未来 10 年，哪个趋势最会影响你的孩子？",
-          subtitle: "不需要选「最正确的」，选你们家最在意的那一个",
-          tags: ["AI替代执行岗", "全球竞争合作", "心理健康重要性上升", "创造力成为硬通货", "终身学习常态化", "虚拟与现实融合"],
-          maxSelect: 1,
-          selectHint: "只选 1 个作为你们的战略判断",
-          customPlaceholder: "写一个你观察到的趋势，比如「大城市内卷加剧」",
-          confirmText: "确认判断 →",
-        },
+        cardType: "trend-rank",
+        cardProps: {},
       },
-      { type: "ai" },                          // N-03: 分析，引出素养
-      {                                         // N-04: 标签选择（素养）
+      { type: "ai" },                          // N-03: 接住趋势选择 + 过渡到能力
+      {                                         // N-04: 两级素养选择
         type: "card",
-        cardType: "tag-select",
-        cardProps: {
-          question: "面对这个趋势，你最想让孩子拥有什么能力？",
-          subtitle: "其他能力也重要，但如果只能押注一个——选哪个？",
-          tags: ["复杂问题解决", "批判性思维", "创造力", "同理心", "韧性", "自我驱动学习", "人机协作", "跨文化沟通"],
-          maxSelect: 1,
-          selectHint: "只选 1 个作为战略重点",
-          customPlaceholder: "比如「能把一件事做到极致的专注力」",
-          confirmText: "确认重点 →",
-        },
+        cardType: "ability-select",
+        cardProps: {},
       },
-      { type: "ai" },                          // N-05: 交叉分析 + 追问
-      {                                         // N-06: 用户确认/回复
+      { type: "ai" },                          // N-05: 诊断三段论（template_based，由前端生成）
+      {                                         // N-06: 结构化确认
         type: "card",
         cardType: "agree-disagree",
         cardProps: {
           disagreePlaceholder: "你觉得哪里不对？比如：我们更看重的其实是……",
         },
       },
-      { type: "ai" },                          // N-07: 汇总
+      { type: "ai" },                          // N-07: 汇总（template_based 快照内容）
       {                                         // N-08: 快照预览
         type: "card",
         cardType: "snapshot",
@@ -183,32 +141,46 @@ export const FLOW: StepFlow[] = [
     subtitle: "家族的底层逻辑",
     nodes: [
       { type: "ai" },                          // W-01: 开场引导
-      {                                         // W-02: 短文填写
+      {                                         // W-02: 故事采集（Q1 + Q1b）
         type: "card",
-        cardType: "short-text",
-        cardProps: {
-          question: "回忆一个让你感受到「我们家就会这么办」的瞬间或故事",
-          placeholder: "比如：有一次爷爷遇到困难，他选择了……这件事让全家人都记住了……",
-        },
-      },
-      { type: "ai" },                          // W-03: 命名 + 追问
-      {                                         // W-04: 用户确认/修正
-        type: "card",
-        cardType: "agree-disagree",
-        cardProps: {
-          disagreePlaceholder: "哪里不准确？比如：我觉得我们家的核心精神更像是……",
-        },
-      },
-      { type: "ai" },                          // W-05: 引导战略诊断
-      {                                         // W-06: 精神继承与升级
-        type: "card",
-        cardType: "spirit-upgrade",
+        cardType: "story-input",
         cardProps: {},
       },
-      { type: "ai" },                          // W-07: 追问可操作性
-      { type: "user" },                        // W-08: 用户回复
-      { type: "ai" },                          // W-09: 汇总
-      {                                         // W-10: 快照预览
+      { type: "ai" },                          // W-03: 接住故事 → 动态选轴（输出 DATA）
+      {                                         // W-04: 二选一取舍（Q2，props 由 W-03 DATA 注入）
+        type: "card",
+        cardType: "tradeoff-choice",
+        cardProps: {},
+      },
+      {                                         // W-05: 英雄原型（Q3）
+        type: "card",
+        cardType: "hero-select",
+        cardProps: {},
+      },
+      {                                         // W-06: 口头禅双引号（Q4）
+        type: "card",
+        cardType: "quote-fill",
+        cardProps: {},
+      },
+      { type: "ai" },                          // W-07: 综合 Q1-Q4 → 提炼候选（输出 DATA）
+      {                                         // W-08: 命名确认
+        type: "card",
+        cardType: "core-code-confirm",
+        cardProps: {},
+      },
+      { type: "ai" },                          // W-09: 确认命名 → 引出 flip side
+      {                                         // W-10: Flip side 填写
+        type: "card",
+        cardType: "flipside-fill",
+        cardProps: {},
+      },
+      {                                         // W-11: 升级路径
+        type: "card",
+        cardType: "upgrade-path",
+        cardProps: {},
+      },
+      { type: "ai" },                          // W-12: 模板生成 final statement（template_based）
+      {                                         // W-13: 快照确认
         type: "card",
         cardType: "snapshot",
         cardProps: { title: "你们的根基快照" },

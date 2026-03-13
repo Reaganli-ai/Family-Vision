@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
 import { Send, User, Clock, LogOut, ThumbsUp, ThumbsDown, Copy } from "lucide-react";
 import { StepId, PhaseId, type Message } from "@/pages/Workspace";
 import aiAvatar from "@/assets/ai-avatar.png";
@@ -14,13 +13,20 @@ import AgreeDisagreeCard from "@/components/cards/AgreeDisagreeCard";
 import SpiritUpgradeCard from "@/components/cards/SpiritUpgradeCard";
 import FamilyCodeCard from "@/components/cards/FamilyCodeCard";
 import CapitalSummaryCard from "@/components/cards/CapitalSummaryCard";
-import OptInCard from "@/components/cards/OptInCard";
-import DeepDiveCard from "@/components/cards/DeepDiveCard";
+import TrendRankCard from "@/components/cards/TrendRankCard";
+import AbilitySelectCard from "@/components/cards/AbilitySelectCard";
+import StoryInputCard from "@/components/cards/StoryInputCard";
+import TradeoffCard from "@/components/cards/TradeoffCard";
+import HeroSelectCard from "@/components/cards/HeroSelectCard";
+import QuoteFillCard from "@/components/cards/QuoteFillCard";
+import CoreCodeConfirmCard from "@/components/cards/CoreCodeConfirmCard";
+import FlipsideFillCard from "@/components/cards/FlipsideFillCard";
+import UpgradePathCard from "@/components/cards/UpgradePathCard";
 
-const QUICK_REPLIES = [
-  "我们先从家庭代号开始吧",
-  "可以先介绍一下流程吗？",
-  "我想直接进入正题",
+
+const PRE_FLOW_REPLIES = [
+  { key: "intro", text: "能先帮我介绍一下这个流程吗？" },
+  { key: "start", text: "我们直接从家庭代号开始吧" },
 ];
 
 interface Props {
@@ -42,6 +48,11 @@ interface Props {
   isAiTyping?: boolean;
   streamingContent?: string;
   onCardConfirm?: (cardType: string, data: unknown) => void;
+  familyCodeConfirmed?: boolean;
+  familyCode?: string;
+  introShown?: boolean;
+  onShowHistory?: () => void;
+  onLogout?: () => void;
 }
 
 const ChatArea = ({
@@ -57,8 +68,12 @@ const ChatArea = ({
   isAiTyping = false,
   streamingContent = "",
   onCardConfirm,
+  familyCodeConfirmed = false,
+  familyCode = "",
+  introShown = false,
+  onShowHistory,
+  onLogout,
 }: Props) => {
-  const navigate = useNavigate();
   const [input, setInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -80,7 +95,10 @@ const ChatArea = ({
   };
 
   const renderCard = (msg: Message, index: number) => {
-    const confirmed = index < messages.length - 1; // cards before the last message are confirmed
+    // Family-code card uses explicit state, not positional logic
+    const confirmed = msg.cardType === "family-code"
+      ? familyCodeConfirmed
+      : index < messages.length - 1;
     const handleConfirm = (data: unknown) => {
       onCardConfirm?.(msg.cardType!, data);
     };
@@ -172,13 +190,7 @@ const ChatArea = ({
         return (
           <AgreeDisagreeCard
             disagreePlaceholder={(msg.cardProps?.disagreePlaceholder as string) || undefined}
-            onConfirm={(data) => {
-              if (data.agreed) {
-                handleConfirm("同意");
-              } else {
-                handleConfirm(`不同意：${data.reason}`);
-              }
-            }}
+            onConfirm={(data) => handleConfirm(data)}
             disabled={confirmed}
           />
         );
@@ -187,6 +199,7 @@ const ChatArea = ({
           <FamilyCodeCard
             onConfirm={(code) => handleConfirm(code)}
             disabled={confirmed}
+            confirmedValue={familyCode}
           />
         );
       case "capital-summary":
@@ -203,22 +216,72 @@ const ChatArea = ({
             disabled={confirmed}
           />
         );
-      case "opt-in":
+      case "trend-rank":
         return (
-          <OptInCard
-            title={(msg.cardProps?.title as string) || ""}
-            description={(msg.cardProps?.description as string) || ""}
-            confirmText={(msg.cardProps?.confirmText as string) || "继续"}
-            skipText={(msg.cardProps?.skipText as string) || "跳过"}
-            onConfirm={(optedIn) => handleConfirm({ optedIn })}
+          <TrendRankCard
+            onConfirm={(ranked) => handleConfirm(ranked)}
             disabled={confirmed}
           />
         );
-      case "deep-dive":
+      case "ability-select":
         return (
-          <DeepDiveCard
-            questions={(msg.cardProps?.questions as { question: string; options: string[]; commentPlaceholder?: string }[]) || []}
-            onConfirm={(answers) => handleConfirm(answers)}
+          <AbilitySelectCard
+            aiHint={(msg.cardProps?.aiHint as string) || undefined}
+            onConfirm={(ability) => handleConfirm(ability)}
+            disabled={confirmed}
+          />
+        );
+      case "story-input":
+        return (
+          <StoryInputCard
+            onConfirm={(data) => handleConfirm(data)}
+            disabled={confirmed}
+          />
+        );
+      case "tradeoff-choice":
+        return (
+          <TradeoffCard
+            axes={(msg.cardProps?.axes as { axisId: string; labelA: string; labelB: string }[]) || []}
+            onConfirm={(choices) => handleConfirm(choices)}
+            disabled={confirmed}
+          />
+        );
+      case "hero-select":
+        return (
+          <HeroSelectCard
+            onConfirm={(traits) => handleConfirm(traits)}
+            disabled={confirmed}
+          />
+        );
+      case "quote-fill":
+        return (
+          <QuoteFillCard
+            onConfirm={(data) => handleConfirm(data)}
+            disabled={confirmed}
+          />
+        );
+      case "core-code-confirm":
+        return (
+          <CoreCodeConfirmCard
+            candidates={(msg.cardProps?.candidates as { name: string; definition: string; evidence: Record<string, string> }[]) || []}
+            onConfirm={(data) => handleConfirm(data)}
+            disabled={confirmed}
+          />
+        );
+      case "flipside-fill":
+        return (
+          <FlipsideFillCard
+            coreCodeName={(msg.cardProps?.coreCodeName as string) || ""}
+            onConfirm={(data) => handleConfirm(data)}
+            disabled={confirmed}
+          />
+        );
+      case "upgrade-path":
+        return (
+          <UpgradePathCard
+            coreCodeName={(msg.cardProps?.coreCodeName as string) || ""}
+            flipsideCost={(msg.cardProps?.flipsideCost as string) || ""}
+            onConfirm={(data) => handleConfirm(data)}
             disabled={confirmed}
           />
         );
@@ -252,12 +315,15 @@ const ChatArea = ({
           </span>
         </div>
         <div className="flex items-center gap-4 flex-shrink-0">
-          <button className="flex items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground transition-colors">
+          <button
+            onClick={onShowHistory}
+            className="flex items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground transition-colors"
+          >
             <Clock size={14} />
-            历史对话
+            历史
           </button>
           <button
-            onClick={() => navigate("/")}
+            onClick={onLogout}
             className="flex items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground transition-colors"
           >
             <LogOut size={14} />
@@ -352,18 +418,39 @@ const ChatArea = ({
             </div>
           )}
 
-          {/* Quick reply chips */}
-          {!hasUserReplied && !isAiTyping && (
+          {/* Quick reply chips — state-driven */}
+          {!familyCodeConfirmed && !isAiTyping && (
             <div className="flex flex-wrap gap-2 ml-12 animate-fade-in" style={{ animationDelay: '0.3s' }}>
-              {QUICK_REPLIES.map((text) => (
-                <button
-                  key={text}
-                  onClick={() => onSendMessage(text)}
-                  className="text-[13px] border border-border rounded-full px-4 py-2 text-foreground hover:bg-secondary transition-colors"
-                >
-                  {text}
-                </button>
-              ))}
+              {!introShown ? (
+                /* Phase 1: fresh — show intro + start options */
+                <>
+                  {PRE_FLOW_REPLIES.map(({ key, text }) => (
+                    <button
+                      key={key}
+                      onClick={() => onSendMessage(key === "intro" ? "##INTRO##" : "##START##")}
+                      className="text-[13px] border border-border rounded-full px-4 py-2 text-foreground hover:bg-secondary transition-colors"
+                    >
+                      {text}
+                    </button>
+                  ))}
+                </>
+              ) : (
+                /* Phase 2: intro shown, code not yet confirmed — show post-intro actions */
+                <>
+                  <button
+                    onClick={() => onSendMessage("##GOTO_CODE##")}
+                    className="text-[13px] bg-foreground text-background rounded-full px-5 py-2 font-medium hover:opacity-90 transition-opacity"
+                  >
+                    好，我知道流程了，我们开始吧
+                  </button>
+                  <button
+                    onClick={() => onSendMessage("##GOTO_CODE##")}
+                    className="text-[13px] border border-border rounded-full px-4 py-2 text-foreground hover:bg-secondary transition-colors"
+                  >
+                    我想先取一个家庭代号
+                  </button>
+                </>
+              )}
             </div>
           )}
           <div ref={messagesEndRef} />
