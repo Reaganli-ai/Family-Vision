@@ -409,8 +409,17 @@ const CompassReport = () => {
 
           {report && (
             <div className="space-y-4 mt-4">
-              {report.insights.map((insight) => (
-                <InsightCard key={insight.id} insight={insight} />
+              {report.insights.map((insight, idx) => (
+                <div key={insight.id}>
+                  {idx < 3 && (
+                    <p className="text-[11px] font-semibold text-blue-600 mb-1">
+                      {["① 机遇匹配题（S×N）：哪项优势最适合培养哪项素养？",
+                        "② 矛盾化解题（W×N）：精神内核与未来需求的紧张如何化解？",
+                        "③ 哲学锚定题（E×S×W）：价值观如何决定资本运用方式？"][idx]}
+                    </p>
+                  )}
+                  <InsightCard insight={insight} />
+                </div>
               ))}
             </div>
           )}

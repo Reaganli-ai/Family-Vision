@@ -1,4 +1,4 @@
-name: E2E Smoke Tests
+name: CI — Build & Report Tests
 
 on:
   pull_request:
@@ -7,10 +7,60 @@ on:
     branches: [main, master]
 
 jobs:
+  build:
+    name: TypeScript + Vite Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript check
+        run: npx tsc --noEmit
+
+      - name: Vite build
+        run: npx vite build
+        env:
+          VITE_SUPABASE_URL: https://placeholder.supabase.co
+          VITE_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.placeholder
+
+  report-check:
+    name: Report & Memo Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run report smoke tests (field mapping + memo scoping)
+        run: npx tsx e2e/report-check.ts
+        env:
+          VITE_SUPABASE_URL: https://placeholder.supabase.co
+          VITE_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.placeholder
+          # Note: Report API test (Test 4) will be skipped in CI since no backend server
+          # The field mapping + memo scoping tests (Tests 1-3) run without backend
+
   e2e:
     name: Smoke Tests (Playwright)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    needs: build
 
     steps:
       - uses: actions/checkout@v4
@@ -30,7 +80,6 @@ jobs:
         run: npx playwright test --repeat-each=3
         env:
           CI: true
-          # Dummy values — tests mock Supabase at the network level
           VITE_SUPABASE_URL: https://placeholder.supabase.co
           VITE_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.placeholder
 
