@@ -1,6 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 
-const anthropic = new Anthropic();
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+});
 
 const SYSTEM_PROMPT = `你是"彼灯教育·家庭愿景工坊"的 AI 导师。
 

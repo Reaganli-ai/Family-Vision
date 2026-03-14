@@ -1,6 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 
-const anthropic = new Anthropic();
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+});
 
 const REPORT_SYSTEM_PROMPT = `你是"彼灯教育·家庭战略罗盘"的报告分析师。
 
