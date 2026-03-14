@@ -198,22 +198,46 @@ export function buildMemo(
 
   // ── W 根基 ── (only if W is allowed)
   if (allowedModules.has("W")) {
-    const wParts: string[] = [];
+    // W-1: Core identity (core code + hero traits) — highlighted
+    const wCoreParts: string[] = [];
     if (cd.W?.coreCode?.value) {
       const cc = cd.W.coreCode.value;
-      wParts.push(`内核「${cc.name}」= ${cc.definition}`);
+      wCoreParts.push(`内核「${cc.name}」= ${cc.definition}`);
     }
     if (cd.W?.heroTraits?.value?.length) {
-      wParts.push(`英雄基因：${cd.W.heroTraits.value.join("·")}`);
+      wCoreParts.push(`英雄基因：${cd.W.heroTraits.value.join("·")}`);
     }
-    if (wParts.length) {
-      notes.push(makeFact("W", "根基", wParts.join("；"), true));
+    if (wCoreParts.length) {
+      notes.push(makeFact("W", "根基", wCoreParts.join("；"), true));
     }
+
+    // W-2: Trade-off choices (family default preferences)
+    if (cd.W?.tradeoffChoices?.value?.length) {
+      const picks = cd.W.tradeoffChoices.value
+        .map((t) => `${t.choice === "A" ? t.labelA : t.labelB} > ${t.choice === "A" ? t.labelB : t.labelA}`)
+        .join(" | ");
+      notes.push(makeFact("W", "取舍倾向", picks));
+    }
+
+    // W-3: Family quotes (childhood → now)
+    if (cd.W?.quoteChildhood?.value || cd.W?.quoteNow?.value) {
+      const parts: string[] = [];
+      if (cd.W.quoteChildhood?.value) parts.push(`「${cd.W.quoteChildhood.value}」`);
+      if (cd.W.quoteNow?.value) parts.push(`「${cd.W.quoteNow.value}」`);
+      const tag = cd.W?.quoteThemeTag?.value ? `（${cd.W.quoteThemeTag.value}）` : "";
+      notes.push(makeFact("W", "家族金句", parts.join(" → ") + tag));
+    }
+
+    // W-4: Upgrade path (full: keep + reduce + from → to)
     if (cd.W?.upgradeKeep?.value && cd.W?.upgradeTo?.value) {
+      const keep = cd.W.upgradeKeep.value;
+      const reduce = cd.W.upgradeReduce?.value;
       const from = cd.W.upgradeFrom?.value;
       const to = cd.W.upgradeTo.value;
-      const keep = cd.W.upgradeKeep.value;
-      notes.push(makeFact("W", "升级路径", `保留「${keep}」，从「${from || "…"}」→「${to}」`));
+      let text = `保留「${keep}」`;
+      if (reduce) text += `，减少「${reduce}」`;
+      text += `，从「${from || "…"}」→「${to}」`;
+      notes.push(makeFact("W", "升级路径", text));
     }
   }
 
