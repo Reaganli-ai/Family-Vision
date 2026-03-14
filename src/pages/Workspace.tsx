@@ -93,6 +93,7 @@ const Workspace = () => {
   const [started, setStarted] = useState(false);
   const [familyCode, setFamilyCode] = useState("");
   const [introShown, setIntroShown] = useState(false);
+  const [allComplete, setAllComplete] = useState(false);
 
   // Structured compass data (source of truth for PDF)
   const compassDataRef = useRef<CompassDataSchema>({});
@@ -383,8 +384,8 @@ const Workspace = () => {
     step3: completedModules.includes(2) ? ["collect", "deepen", "confirm"] : [],
     step4: completedModules.includes(3) ? ["collect", "deepen", "confirm"] : [],
   };
-  // Add current in-progress phases
-  if (!completedModules.includes(currentModule)) {
+  // Add current in-progress phases (only if the current module is NOT already completed)
+  if (!completedModules.includes(currentModule) && !allComplete) {
     const phases: PhaseId[] = [];
     if (currentPhase === "deepen" || currentPhase === "confirm") phases.push("collect");
     if (currentPhase === "confirm") phases.push("deepen");
@@ -775,14 +776,14 @@ const Workspace = () => {
         setTimeout(() => requestAIMessage(summary), 300);
         return;
       }
-
-      // All 4 modules complete — show congratulations
+      // All 4 modules complete
+      setAllComplete(true);
       setMessages((prev) => [
         ...prev,
         { role: "user", content: summary, timestamp: new Date() },
         {
           role: "ai",
-          content: "恭喜你们完成了全部四个模块的探索！🎉\n\n你们已经梳理了**家底**、审视了**眼光**、挖掘了**根基**、达成了**共识**。\n\n现在可以点击右侧的「导出家庭罗盘」，生成你们的专属 **《家庭战略定位罗盘》** 报告。",
+          content: "恭喜你们完成了全部四个模块的探索！\n\n你们已经梳理了**家底**、审视了**眼光**、挖掘了**根基**、达成了**共识**。\n\n现在可以点击右侧的「导出家庭罗盘」，生成你们的专属 **《家庭战略定位罗盘》** 报告。",
           timestamp: new Date(),
         },
       ]);
