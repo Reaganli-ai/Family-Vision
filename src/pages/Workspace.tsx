@@ -152,13 +152,22 @@ const Workspace = () => {
           setStarted(latest.started);
           startedRef.current = latest.started;
           // Restore completed modules: all modules before current are done
-          const restored = Array.from({ length: latest.current_module }, (_, i) => i);
-          setCompletedModules(restored);
+          let restored = Array.from({ length: latest.current_module }, (_, i) => i);
 
           // Load compass data
           const cd = await loadCompassData(latest.id);
           if (cancelled) return;
           if (cd) { compassDataRef.current = cd as CompassDataSchema; bumpCompass(); }
+
+          // Check if current module is also completed (has snapshot) — fixes 3/4 bug on refresh
+          const currentModuleId = FLOW[latest.current_module]?.id;
+          if (currentModuleId && (compassDataRef.current as Record<string, any>)[currentModuleId]?.snapshot) {
+            restored = [...restored, latest.current_module];
+            if (latest.current_module >= FLOW.length - 1) {
+              setAllComplete(true);
+            }
+          }
+          setCompletedModules(restored);
 
           const rawMsgs = await loadMessages(latest.id);
           if (cancelled) return;
@@ -246,8 +255,7 @@ const Workspace = () => {
     setNotes([]);
     // openLoops removed — memo system handles state
     // Restore completed modules: all modules before current are done
-    const restored = Array.from({ length: convo.current_module }, (_, i) => i);
-    setCompletedModules(restored);
+    let restored = Array.from({ length: convo.current_module }, (_, i) => i);
     compassDataRef.current = {};
     bumpCompass();
 
@@ -257,6 +265,17 @@ const Workspace = () => {
         loadCompassData(convo.id),
       ]);
       if (cd) { compassDataRef.current = cd as CompassDataSchema; bumpCompass(); }
+
+      // Check if current module is also completed (has snapshot) — fixes 3/4 bug on refresh
+      const currentModuleId = FLOW[convo.current_module]?.id;
+      if (currentModuleId && (compassDataRef.current as Record<string, any>)[currentModuleId]?.snapshot) {
+        restored = [...restored, convo.current_module];
+        if (convo.current_module >= FLOW.length - 1) {
+          setAllComplete(true);
+        }
+      }
+      setCompletedModules(restored);
+
       const msgs = deduplicateMessages(rawMsgs);
       lastSavedCountRef.current = msgs.length;
       setMessages(msgs.length > 0 ? msgs : createWelcomeMessages());
@@ -414,6 +433,7 @@ const Workspace = () => {
       currentModuleData: moduleDataRef.current,
       allModuleData: allDataRef.current,
       snapshots: snapshotsRef.current,
+      compassData: compassDataRef.current,
     };
   }, []);
 
@@ -571,23 +591,124 @@ const Workspace = () => {
         }
       }
 
-      // For core-code-confirm card: pass AI candidates
+      // For core-code-confirm card: pass AI candidates, with fallback
       let candidates: unknown[] | undefined;
-      if (next.cardType === "core-code-confirm" && structuredData) {
-        const sd = structuredData as { candidates?: unknown[] };
-        candidates = sd.candidates;
+      if (next.cardType === "core-code-confirm") {
+        if (structuredData) {
+          const sd = structuredData as { candidates?: unknown[] };
+          candidates = sd.candidates;
+        }
+        // Fallback: if AI didn't return candidates, build from compass data
+        if (!candidates?.length) {
+          const cd = compassDataRef.current;
+          const story = cd.W?.story?.value || "";
+          const tag = cd.W?.storyPriorityTag?.value || "";
+          const heroes = cd.W?.heroTraits?.value || [];
+          const tradeoffs = cd.W?.tradeoffChoices?.value || [];
+          const quote = cd.W?.quoteChildhood?.value || "";
+          const quoteNow = cd.W?.quoteNow?.value || "";
+          const picks = Array.isArray(tradeoffs)
+            ? tradeoffs.map((t: { choice: string; labelA: string; labelB: string }) =>
+                t.choice === "A" ? t.labelA : t.labelB
+              )
+            : [];
+          // Generate 3 candidates from available data
+          const fallbackCandidates: { name: string; definition: string; evidence: Record<string, string> }[] = [];
+          if (tag) {
+            fallbackCandidates.push({
+              name: tag,
+              definition: `以「${tag}」为核心的家族生存哲学`,
+              evidence: {
+                story: story ? story.slice(0, 30) + "…" : "—",
+                tradeoff: picks.join("、") || "—",
+                hero: Array.isArray(heroes) ? heroes.slice(0, 2).join("、") : "—",
+                quote: quote || quoteNow || "—",
+              },
+            });
+          }
+          if (Array.isArray(heroes) && heroes[0]) {
+            fallbackCandidates.push({
+              name: heroes[0],
+              definition: `崇尚「${heroes[0]}」精神，在困难中寻找突破`,
+              evidence: {
+                story: story ? story.slice(0, 30) + "…" : "—",
+                tradeoff: picks.join("、") || "—",
+                hero: heroes.slice(0, 2).join("、"),
+                quote: quote || quoteNow || "—",
+              },
+            });
+          }
+          if (picks[0]) {
+            fallbackCandidates.push({
+              name: picks[0],
+              definition: `在取舍中坚定选择「${picks[0]}」的家庭策略`,
+              evidence: {
+                story: story ? story.slice(0, 30) + "…" : "—",
+                tradeoff: picks.join("、") || "—",
+                hero: Array.isArray(heroes) ? heroes.slice(0, 2).join("、") : "—",
+                quote: quote || quoteNow || "—",
+              },
+            });
+          }
+          if (fallbackCandidates.length > 0) candidates = fallbackCandidates;
+        }
       }
 
-      // For flipside-fill card: inject coreCodeName
+      // For quote-fill card: inject dynamic hints from prior W data
+      let quoteHints: string[] | undefined;
+      if (next.cardType === "quote-fill") {
+        const cd = compassDataRef.current;
+        const hints: string[] = [];
+        // From story priority tag
+        if (cd.W?.storyPriorityTag?.value) hints.push(cd.W.storyPriorityTag.value);
+        // From hero traits
+        const heroTraits = cd.W?.heroTraits?.value;
+        if (Array.isArray(heroTraits)) hints.push(...heroTraits.slice(0, 3));
+        // From tradeoff choices — the side they picked
+        const tradeoffs = cd.W?.tradeoffChoices?.value;
+        if (Array.isArray(tradeoffs)) {
+          for (const t of tradeoffs.slice(0, 2)) {
+            hints.push(t.choice === "A" ? t.labelA : t.labelB);
+          }
+        }
+        // Deduplicate
+        quoteHints = [...new Set(hints)].slice(0, 6);
+      }
+
+      // For flipside-fill card: inject coreCodeName + AI suggestions
       let coreCodeName: string | undefined;
+      let flipsideSuggestions: { tags?: string[]; example?: string; benefits?: string[]; costs?: string[] } | undefined;
       if (next.cardType === "flipside-fill" || next.cardType === "upgrade-path") {
         coreCodeName = compassDataRef.current.W?.coreCode?.value?.name;
       }
+      if (next.cardType === "flipside-fill" && structuredData) {
+        const sd = structuredData as { flipside?: { tags?: string[]; example?: string; benefits?: string[]; costs?: string[] } };
+        if (sd.flipside) flipsideSuggestions = sd.flipside;
+      }
 
-      // For upgrade-path card: inject flipsideCost
+      // For upgrade-path card: inject flipside context for smart defaults
       let flipsideCost: string | undefined;
+      let upgradeSuggestions: { keep?: string; reduce?: string; from?: string; to?: string } | undefined;
       if (next.cardType === "upgrade-path") {
-        flipsideCost = compassDataRef.current.W?.flipsideCost?.value;
+        const cd = compassDataRef.current;
+        flipsideCost = cd.W?.flipsideCost?.value;
+        const benefit = cd.W?.flipsideBenefit?.value;
+        const cost = cd.W?.flipsideCost?.value;
+        const tags = cd.W?.flipsideTags?.value;
+        const example = cd.W?.flipsideExample?.value;
+        const story = cd.W?.story?.value;
+        // Build smart defaults from flipside answers
+        if (benefit || cost) {
+          upgradeSuggestions = {
+            keep: typeof benefit === "string" ? benefit : undefined,
+            reduce: typeof cost === "string" ? cost : (Array.isArray(tags) ? tags[0] : undefined),
+            // Infer "from" from the flipside example or tags
+            from: typeof example === "string" && example.length > 0
+              ? example.slice(0, 20) + (example.length > 20 ? "…" : "")
+              : (Array.isArray(tags) ? tags.join("、") : undefined),
+            // Leave "to" empty — this is the creative part the user should think about
+          };
+        }
       }
 
       const cardMsg: Message = {
@@ -605,6 +726,9 @@ const Workspace = () => {
           ...(candidates ? { candidates } : {}),
           ...(coreCodeName ? { coreCodeName } : {}),
           ...(flipsideCost ? { flipsideCost } : {}),
+          ...(flipsideSuggestions ? { suggestions: flipsideSuggestions } : {}),
+          ...(upgradeSuggestions ? { upgradeSuggestions } : {}),
+          ...(quoteHints?.length ? { themeHints: quoteHints } : {}),
         },
       };
       setMessages((prev) => [...prev, cardMsg]);
@@ -757,6 +881,20 @@ const Workspace = () => {
       // Save snapshot
       const moduleId = FLOW[mod]?.id || "";
       setSnapshots((prev) => ({ ...prev, [moduleId]: data as string }));
+      // Also persist snapshot to compass data (so restoration detects completion)
+      if (moduleId) {
+        compassDataRef.current = {
+          ...compassDataRef.current,
+          [moduleId]: {
+            ...(compassDataRef.current as Record<string, any>)[moduleId],
+            snapshot: field(data as string, "user_selected"),
+          },
+        };
+        bumpCompass();
+        if (conversationIdRef.current) {
+          saveCompassData(conversationIdRef.current, compassDataRef.current as Record<string, unknown>).catch(console.error);
+        }
+      }
       // Module complete
       allDataRef.current[moduleId] = { ...moduleDataRef.current };
       setCompletedModules((prev) => [...prev, mod]);

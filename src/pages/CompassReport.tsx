@@ -224,6 +224,11 @@ const CompassReport = () => {
     if (!reportRef.current || exporting) return;
     setExporting(true);
     try {
+      // Hide draft options and edit controls during PDF capture
+      reportRef.current.classList.add("pdf-exporting");
+      // Small delay for DOM to update
+      await new Promise((r) => setTimeout(r, 50));
+
       const sections = reportRef.current.querySelectorAll<HTMLElement>(".page-break");
       if (sections.length === 0) return;
       const pdf = new jsPDF("p", "mm", "a4");
@@ -242,9 +247,11 @@ const CompassReport = () => {
       const today = new Date().toISOString().slice(0, 10);
       pdf.save(`${today}-${data.familyCode || "Family"}-家庭战略罗盘.pdf`);
     } catch (err) {
+      reportRef.current?.classList.remove("pdf-exporting");
       console.error("PDF export failed:", err);
       alert("导出失败，请重试");
     } finally {
+      reportRef.current?.classList.remove("pdf-exporting");
       setExporting(false);
     }
   }, [data.familyCode, exporting]);
@@ -535,6 +542,11 @@ const CompassReport = () => {
         }
         .text-highlight { color: #E8734A; }
         .snapshot-text { font-size: 14px; line-height: 2; color: #2D2A26; }
+        /* Hide draft options & edit controls during PDF export */
+        .pdf-exporting .draft-options,
+        .pdf-exporting .draft-edit-controls,
+        .pdf-exporting .no-print { display: none !important; }
+        .pdf-exporting .draft-final-only { display: block !important; }
       `}</style>
     </div>
   );
@@ -603,16 +615,18 @@ function DraftCard({
     setIsEditing(false);
   };
 
+  const finalContent = editedValue || draft.options[selectedIdx]?.content || "（请选择一个版本）";
+
   return (
     <div className="border-2 border-amber-200 bg-amber-50/30 rounded-xl p-4">
       <div className="flex items-center gap-2 mb-2">
-        <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">可编辑草案</span>
+        <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full draft-edit-controls">可编辑草案</span>
         <p className="text-[13px] font-semibold text-foreground">{draft.title}</p>
       </div>
-      <p className="text-[12px] text-muted-foreground mb-3">{draft.description}</p>
+      <p className="text-[12px] text-muted-foreground mb-3 draft-edit-controls">{draft.description}</p>
 
-      {/* Option selector */}
-      <div className="space-y-2 mb-3">
+      {/* Option selector — hidden in PDF */}
+      <div className="space-y-2 mb-3 draft-options">
         {draft.options.map((opt, idx) => (
           <button
             key={idx}
@@ -629,8 +643,8 @@ function DraftCard({
         ))}
       </div>
 
-      {/* Edit area */}
-      <div className="border-t border-amber-200 pt-3">
+      {/* Edit area — hidden in PDF */}
+      <div className="border-t border-amber-200 pt-3 draft-edit-controls">
         <div className="flex items-center justify-between mb-2">
           <p className="text-[11px] font-medium text-foreground">你的最终版本</p>
           {!isEditing && (
@@ -652,9 +666,16 @@ function DraftCard({
           </div>
         ) : (
           <p className="text-[13px] text-foreground leading-relaxed bg-white rounded-lg p-3 border border-gray-100">
-            {editedValue || draft.options[selectedIdx]?.content || "（请选择一个版本）"}
+            {finalContent}
           </p>
         )}
+      </div>
+
+      {/* PDF-only: clean final version (hidden on screen, shown during export) */}
+      <div className="draft-final-only hidden">
+        <p className="text-[13px] text-foreground leading-relaxed">
+          {finalContent}
+        </p>
       </div>
     </div>
   );

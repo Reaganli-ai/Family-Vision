@@ -1,13 +1,15 @@
 import { useState } from "react";
 
-const THEME_TAGS = ["安全感", "秩序", "关系", "面子", "效率", "成长", "尊严"];
+const DEFAULT_HINTS = ["安全感", "秩序", "效率", "行动", "关系", "成长", "尊严"];
 
 interface Props {
+  themeHints?: string[];
   onConfirm: (data: { childhood: string; now: string; themeTag?: string }) => void;
   disabled?: boolean;
 }
 
-const QuoteFillCard = ({ onConfirm, disabled = false }: Props) => {
+const QuoteFillCard = ({ themeHints, onConfirm, disabled = false }: Props) => {
+  const hints = themeHints?.length ? themeHints : DEFAULT_HINTS;
   const [childhood, setChildhood] = useState("");
   const [now, setNow] = useState("");
   const [themeTag, setThemeTag] = useState<string | undefined>(undefined);
@@ -64,19 +66,27 @@ const QuoteFillCard = ({ onConfirm, disabled = false }: Props) => {
       </div>
 
       <div className="space-y-1.5">
-        <p className="text-[12px] text-muted-foreground">你觉得这两句共同在保护什么？（可选）</p>
-        <div className="flex flex-wrap gap-2">
-          {THEME_TAGS.map((tag) => (
+        <label className="text-[13px] font-medium text-foreground">你觉得这两句共同在保护什么？（可选）</label>
+        <input
+          type="text"
+          value={themeTag || ""}
+          onChange={(e) => setThemeTag(e.target.value || undefined)}
+          placeholder={`比如：${hints.slice(0, 4).join("、")}……`}
+          className="w-full bg-secondary/40 rounded-lg px-3 py-2 text-[13px] outline-none placeholder:text-muted-foreground/40 focus:ring-1 focus:ring-primary/30"
+        />
+        <div className="flex flex-wrap gap-1.5">
+          {hints.map((hint) => (
             <button
-              key={tag}
-              onClick={() => setThemeTag(themeTag === tag ? undefined : tag)}
-              className={`px-3.5 py-1.5 rounded-full text-[12px] font-medium transition-all ${
-                themeTag === tag
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-secondary text-muted-foreground hover:bg-secondary/80"
+              key={hint}
+              type="button"
+              onClick={() => setThemeTag(themeTag === hint ? undefined : hint)}
+              className={`px-2.5 py-1 rounded-full text-[11px] transition-all ${
+                themeTag === hint
+                  ? "bg-primary text-primary-foreground font-medium"
+                  : "bg-secondary/60 text-muted-foreground/70 hover:bg-secondary"
               }`}
             >
-              {tag}
+              {hint}
             </button>
           ))}
         </div>

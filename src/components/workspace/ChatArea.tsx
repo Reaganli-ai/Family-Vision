@@ -256,6 +256,7 @@ const ChatArea = ({
       case "quote-fill":
         return (
           <QuoteFillCard
+            themeHints={(msg.cardProps?.themeHints as string[]) || undefined}
             onConfirm={(data) => handleConfirm(data)}
             disabled={confirmed}
           />
@@ -272,6 +273,7 @@ const ChatArea = ({
         return (
           <FlipsideFillCard
             coreCodeName={(msg.cardProps?.coreCodeName as string) || ""}
+            suggestions={msg.cardProps?.suggestions as { tags?: string[]; example?: string; benefits?: string[]; costs?: string[] } | undefined}
             onConfirm={(data) => handleConfirm(data)}
             disabled={confirmed}
           />
@@ -281,6 +283,7 @@ const ChatArea = ({
           <UpgradePathCard
             coreCodeName={(msg.cardProps?.coreCodeName as string) || ""}
             flipsideCost={(msg.cardProps?.flipsideCost as string) || ""}
+            upgradeSuggestions={msg.cardProps?.upgradeSuggestions as { keep?: string; reduce?: string; from?: string; to?: string } | undefined}
             onConfirm={(data) => handleConfirm(data)}
             disabled={confirmed}
           />

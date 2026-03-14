@@ -39,12 +39,6 @@ const LEVEL_DESC: Record<string, Record<string, string>> = {
   },
 };
 
-const DISAGREE_REASONS = [
-  "我选错了某个等级",
-  "总结方向不对（高估/低估了某项资本）",
-  "描述太抽象，我希望更具体",
-  "我想补充一个例子",
-];
 
 function buildSummary(rows: CapitalRow[]): string[] {
   return rows.map((r) => {
@@ -75,9 +69,8 @@ function getHighlightText(rows: CapitalRow[]): string {
 }
 
 const CapitalSummaryCard = ({ rows, onConfirm, disabled }: Props) => {
-  const [step, setStep] = useState<"summary" | "disagree">("summary");
-  const [selectedReason, setSelectedReason] = useState("");
-  const [detail, setDetail] = useState("");
+  const [comment, setComment] = useState("");
+  const [showComment, setShowComment] = useState(false);
 
   const summaryLines = buildSummary(rows);
   const highlightText = getHighlightText(rows);
@@ -95,56 +88,7 @@ const CapitalSummaryCard = ({ rows, onConfirm, disabled }: Props) => {
     );
   }
 
-  if (step === "disagree") {
-    return (
-      <div className="bg-card rounded-xl border-2 border-primary/20 p-5 space-y-4 max-w-lg">
-        <p className="text-[14px] font-semibold text-foreground">哪里不太对？</p>
-        <div className="space-y-2">
-          {DISAGREE_REASONS.map((reason) => (
-            <button
-              key={reason}
-              onClick={() => setSelectedReason(reason)}
-              className={`w-full text-left px-4 py-2.5 rounded-lg text-[13px] transition-all border ${
-                selectedReason === reason
-                  ? "border-primary bg-primary/5 text-foreground font-medium"
-                  : "border-border bg-background text-muted-foreground hover:border-primary/30"
-              }`}
-            >
-              {reason}
-            </button>
-          ))}
-        </div>
-        <div>
-          <p className="text-[11.5px] text-muted-foreground mb-1">补充说明（可选）</p>
-          <textarea
-            value={detail}
-            onChange={(e) => setDetail(e.target.value)}
-            placeholder="比如：我们文化资本应该是 L3，因为……"
-            rows={2}
-            maxLength={200}
-            className="w-full border border-border rounded-lg px-3 py-2 text-[13px] outline-none resize-none focus:ring-1 focus:ring-primary/30 placeholder:text-muted-foreground/40"
-          />
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => setStep("summary")}
-            className="flex-1 text-[13px] text-muted-foreground border border-border rounded-lg py-2 hover:bg-secondary/50 transition-colors"
-          >
-            返回
-          </button>
-          <button
-            onClick={() => onConfirm(false, selectedReason, detail.trim() || undefined)}
-            disabled={!selectedReason}
-            className="flex-1 text-[13px] font-medium bg-foreground text-background rounded-lg py-2 hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            提交反馈 →
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // Summary + confirm step
+  // Single-step: summary + optional comment + confirm/disagree
   return (
     <div className="bg-card rounded-xl border-2 border-primary/20 p-5 space-y-4 max-w-lg">
       <div>
@@ -165,22 +109,48 @@ const CapitalSummaryCard = ({ rows, onConfirm, disabled }: Props) => {
         </p>
       </div>
 
-      <div className="border-t border-border pt-3">
-        <p className="text-[13px] font-medium text-foreground mb-3">以上总结符合你们家吗？</p>
+      <div className="border-t border-border pt-3 space-y-3">
+        <p className="text-[13px] font-medium text-foreground">以上总结符合你们家吗？</p>
+
+        {showComment ? (
+          <textarea
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            placeholder="说说哪里不太对，或者补充你的想法……"
+            rows={2}
+            maxLength={300}
+            autoFocus
+            className="w-full border border-border rounded-lg px-3 py-2 text-[13px] outline-none resize-none focus:ring-1 focus:ring-primary/30 placeholder:text-muted-foreground/40"
+          />
+        ) : null}
+
         <div className="flex gap-2">
           <button
-            onClick={() => onConfirm(true)}
+            onClick={() => onConfirm(true, undefined, comment.trim() || undefined)}
             className="flex-1 text-[13px] font-medium bg-foreground text-background rounded-lg py-2.5 hover:opacity-90 transition-opacity"
           >
-            符合，继续 →
+            {comment.trim() ? "提交并继续 →" : "符合，继续 →"}
           </button>
-          <button
-            onClick={() => setStep("disagree")}
-            className="flex-1 text-[13px] text-muted-foreground border border-border rounded-lg py-2.5 hover:bg-secondary/50 transition-colors"
-          >
-            不太对
-          </button>
+          {!showComment ? (
+            <button
+              onClick={() => setShowComment(true)}
+              className="flex-1 text-[13px] text-muted-foreground border border-border rounded-lg py-2.5 hover:bg-secondary/50 transition-colors"
+            >
+              不太对 / 想补充
+            </button>
+          ) : (
+            <button
+              onClick={() => { setShowComment(false); setComment(""); }}
+              className="text-[13px] text-muted-foreground border border-border rounded-lg px-4 py-2.5 hover:bg-secondary/50 transition-colors"
+            >
+              收起
+            </button>
+          )}
         </div>
+
+        <p className="text-[11px] text-muted-foreground/60 text-center">
+          也可以直接在下方聊天框里打字告诉我
+        </p>
       </div>
     </div>
   );
