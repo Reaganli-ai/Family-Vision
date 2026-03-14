@@ -2,7 +2,17 @@
   "buildCommand": "vite build",
   "outputDirectory": "dist",
   "framework": "vite",
+  "functions": {
+    "api/chat.js": {
+      "maxDuration": 60
+    },
+    "api/report.js": {
+      "maxDuration": 60
+    }
+  },
   "rewrites": [
+    { "source": "/api/chat", "destination": "/api/chat" },
+    { "source": "/api/report", "destination": "/api/report" },
     { "source": "/(.*)", "destination": "/" }
   ]
 }
