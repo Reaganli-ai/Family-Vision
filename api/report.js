@@ -244,6 +244,7 @@ ${factsJson}
     res.json({ facts, insights, drafts, warnings, generated_at: new Date().toISOString() });
   } catch (error) {
     console.error("Report generation error:", error);
-    res.status(500).json({ error: "报告生成失败" });
+    const detail = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: "报告生成失败", detail });
   }
 }
