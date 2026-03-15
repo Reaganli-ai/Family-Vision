@@ -152,7 +152,7 @@ const CompassReport = () => {
   // Draft edits (persisted)
   const [draftEdits, setDraftEdits] = useState<Record<string, string>>({});
 
-  // Load compass data from DB
+  // Load compass data + saved draft edits from DB
   useEffect(() => {
     if (!conversationId) { setLoading(false); return; }
     (async () => {
@@ -162,6 +162,10 @@ const CompassReport = () => {
           const typed = cd as CompassDataSchema;
           setCompassData(typed);
           setData(toViewData(typed));
+          // Restore saved draft edits
+          if ((typed as Record<string, unknown>).draftEdits) {
+            setDraftEdits((typed as Record<string, unknown>).draftEdits as Record<string, string>);
+          }
         }
       } catch (err) {
         console.error("Failed to load compass data:", err);
@@ -170,6 +174,22 @@ const CompassReport = () => {
       }
     })();
   }, [conversationId]);
+
+  // Persist draft edits to DB (debounced)
+  useEffect(() => {
+    if (!conversationId || Object.keys(draftEdits).length === 0) return;
+    const timer = setTimeout(async () => {
+      try {
+        const cd = await loadCompassData(conversationId);
+        if (cd) {
+          await saveCompassData(conversationId, { ...cd, draftEdits });
+        }
+      } catch (err) {
+        console.error("Failed to save draft edits:", err);
+      }
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [draftEdits, conversationId]);
 
   // Generate report via Report Agent
   const generateReport = useCallback(async () => {

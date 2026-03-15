@@ -11,7 +11,6 @@ import {
 import { sendChatMessage, type ChatMessage } from "@/lib/api";
 import { Plus, X, Search } from "lucide-react";
 import { FLOW, type CardNode } from "@/lib/flow";
-import { buildMemo, type Note } from "@/lib/notes";
 import { useAuth } from "@/lib/auth";
 import {
   listConversations,
@@ -101,8 +100,6 @@ const Workspace = () => {
   const [compassVersion, setCompassVersion] = useState(0);
   const bumpCompass = () => setCompassVersion((v) => v + 1);
 
-  // Consulting memo state — rebuilt from compass_data at milestones
-  const [notes, setNotes] = useState<Note[]>([]);
 
   // Refs to avoid stale closures in async callbacks
   const currentModuleRef = useRef(currentModule);
@@ -183,10 +180,6 @@ const Workspace = () => {
             setMessages(createWelcomeMessages());
           }
 
-          // Rebuild notes from compass_data (scoped to current module)
-          if (compassDataRef.current && Object.keys(compassDataRef.current).length > 0) {
-            setNotes(buildMemo(compassDataRef.current, latest.current_module, restored));
-          }
         } else {
           // No conversations — create a new one
           const convo = await createConversation("", "新对话");
@@ -252,7 +245,7 @@ const Workspace = () => {
     startedRef.current = convo.started;
     setIntroShown(false);
     setModuleData({});
-    setNotes([]);
+
     // openLoops removed — memo system handles state
     // Restore completed modules: all modules before current are done
     let restored = Array.from({ length: convo.current_module }, (_, i) => i);
@@ -280,10 +273,6 @@ const Workspace = () => {
       lastSavedCountRef.current = msgs.length;
       setMessages(msgs.length > 0 ? msgs : createWelcomeMessages());
 
-      // Rebuild notes from compass_data (scoped to current module)
-      if (compassDataRef.current && Object.keys(compassDataRef.current).length > 0) {
-        setNotes(buildMemo(compassDataRef.current, convo.current_module, restored));
-      }
     } catch (err) {
       console.error("Failed to load messages:", err);
       lastSavedCountRef.current = 0;
@@ -334,7 +323,7 @@ const Workspace = () => {
       setModuleData({});
       setCompletedModules([]);
       setSnapshots({});
-      setNotes([]);
+  
       // openLoops removed — memo system handles state
       setMessages(createWelcomeMessages());
       // Refresh conversation list
@@ -355,31 +344,6 @@ const Workspace = () => {
   const allDataRef = useRef<Record<string, Record<string, unknown>>>({});
   // Capital matrix rows — passed from capital-matrix card to capital-summary card
   const capitalRowsRef = useRef<{ label: string; level: string; keyword: string }[]>([]);
-
-  /**
-   * Rebuild memo from compass_data. Only called at milestones:
-   * - Card confirm (compass_data updated)
-   * - Family code edit
-   * - Session restore
-   * NOT called on every keystroke / chat message.
-   */
-  const rebuildMemo = useCallback(() => {
-    setNotes(buildMemo(
-      compassDataRef.current,
-      currentModuleRef.current,
-      completedModulesRef.current,
-    ));
-  }, []);
-
-  const handleUpdateNote = useCallback((id: string, updates: Partial<Note>) => {
-    setNotes((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, ...updates } : n))
-    );
-  }, []);
-
-  const handleDeleteNote = useCallback((id: string) => {
-    setNotes((prev) => prev.filter((n) => n.id !== id));
-  }, []);
 
   const currentStep = STEP_MAP[currentModule] || "step1";
   const flow = FLOW[currentModule];
@@ -793,7 +757,7 @@ const Workspace = () => {
 
       if (isReEdit) {
         // Re-edit: update DB, rebuild memo, show confirmation
-        rebuildMemo();
+    
         if (conversationIdRef.current) {
           updateConversation(conversationIdRef.current, { family_code: code }).catch(console.error);
           saveCompassData(conversationIdRef.current, compassDataRef.current as Record<string, unknown>).catch(console.error);
@@ -808,7 +772,7 @@ const Workspace = () => {
       // First-time: start the flow
       setStarted(true);
       startedRef.current = true;
-      rebuildMemo();
+  
       setMessages((prev) => [
         ...prev,
         { role: "user", content: `家庭代号：${code}`, timestamp: new Date() },
@@ -832,7 +796,7 @@ const Workspace = () => {
     );
     bumpCompass();
     // Rebuild memo at this milestone (card confirm)
-    rebuildMemo();
+
     if (conversationIdRef.current) {
       saveCompassData(
         conversationIdRef.current,
@@ -1041,7 +1005,6 @@ const Workspace = () => {
         },
       };
       bumpCompass();
-      rebuildMemo(); // N snapshot milestone — triggers insights
       if (conversationIdRef.current) {
         saveCompassData(conversationIdRef.current, compassDataRef.current as Record<string, unknown>).catch(console.error);
       }
@@ -1087,7 +1050,6 @@ const Workspace = () => {
         },
       };
       bumpCompass();
-      rebuildMemo(); // W snapshot milestone — triggers insights
       if (conversationIdRef.current) {
         saveCompassData(conversationIdRef.current, compassDataRef.current as Record<string, unknown>).catch(console.error);
       }
@@ -1200,7 +1162,7 @@ const Workspace = () => {
       familyCodeRef.current = detectedCode;
       compassDataRef.current = { ...compassDataRef.current, familyCode: field(detectedCode, "user_typed") };
       bumpCompass();
-      rebuildMemo();
+  
       if (conversationIdRef.current) {
         updateConversation(conversationIdRef.current, { family_code: detectedCode }).catch(console.error);
         saveCompassData(conversationIdRef.current, compassDataRef.current as Record<string, unknown>).catch(console.error);
@@ -1334,9 +1296,7 @@ const Workspace = () => {
                 completedPhases={completedPhases}
                 steps={STEPS}
                 onExport={() => window.open(`/compass?cid=${conversationId || ""}`, "_blank")}
-                notes={notes}
-                onUpdateNote={handleUpdateNote}
-                onDeleteNote={handleDeleteNote}
+                compassData={compassDataRef.current}
                 started={started}
               />
             </div>

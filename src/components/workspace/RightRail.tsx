@@ -1,17 +1,11 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useMemo } from "react";
 import {
   Check,
   Download,
-  FileText,
-  Pencil,
-  Trash2,
-  Star,
-  X,
-  Lightbulb,
   ChevronDown,
   ChevronUp,
-  Eye,
-  EyeOff,
+  Circle,
+  AlertCircle,
 } from "lucide-react";
 import {
   Dialog,
@@ -21,30 +15,32 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import type { StepId, StepInfo, PhaseId } from "@/pages/Workspace";
-import { PHASE_LABELS, STEPS } from "@/pages/Workspace";
-import type { Note, OpenLoop } from "@/lib/notes";
+import { STEPS } from "@/pages/Workspace";
+import type { CompassDataSchema } from "@/lib/compass-schema";
 
 // ═══════════════════════════════════════════════════════════
 //  Props
 // ═══════════════════════════════════════════════════════════
 
 interface Props {
-  // A) Progress
   currentStep: StepId;
   currentPhase: PhaseId;
   completedSteps: StepId[];
   completedPhases: Record<StepId, PhaseId[]>;
   steps: StepInfo[];
-  // B) Export
   onExport: () => void;
-  // C) Consulting Memo
-  notes: Note[];
-  onUpdateNote: (id: string, updates: Partial<Note>) => void;
-  onDeleteNote: (id: string) => void;
+  compassData: CompassDataSchema;
   started: boolean;
 }
 
 const PHASES: PhaseId[] = ["collect", "deepen", "confirm"];
+
+const MODULE_COLORS: Record<string, string> = {
+  S: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  N: "bg-blue-50 text-blue-700 border-blue-200",
+  W: "bg-amber-50 text-amber-700 border-amber-200",
+  E: "bg-purple-50 text-purple-700 border-purple-200",
+};
 
 const MODULE_LABELS: Record<string, string> = {
   S: "家底",
@@ -52,6 +48,91 @@ const MODULE_LABELS: Record<string, string> = {
   W: "根基",
   E: "共识",
 };
+
+// ═══════════════════════════════════════════════════════════
+//  Data extraction
+// ═══════════════════════════════════════════════════════════
+
+interface Decision { moduleId: string; tag: string; value: string; }
+interface Pending { moduleId: string; label: string; }
+
+function extractDecisions(cd: CompassDataSchema, completedModules: string[]): Decision[] {
+  const decisions: Decision[] = [];
+  const add = (mod: string, tag: string, val: unknown) => {
+    if (!completedModules.includes(mod) && mod !== "_") return;
+    if (val && typeof val === "string" && val.length > 0) {
+      decisions.push({ moduleId: mod, tag, value: val });
+    }
+  };
+
+  // S
+  const matrix = cd.S?.capitalMatrix?.value;
+  if (Array.isArray(matrix) && matrix.length > 0) {
+    const summary = matrix.map((r: { label: string; level: string }) => `${r.label.slice(0, 2)}${r.level}`).join(" ");
+    decisions.push({ moduleId: "S", tag: "资本", value: summary });
+  }
+  add("S", "优先升级", cd.S?.priorityUpgrade?.value);
+
+  // N
+  const trends = cd.N?.trendsRanked?.value;
+  if (Array.isArray(trends) && trends.length > 0) {
+    add("N", "主假设", trends[0]);
+  }
+  add("N", "能力押注", cd.N?.coreAbility?.value);
+
+  // W
+  const coreCode = cd.W?.coreCode?.value;
+  if (coreCode && typeof coreCode === "object" && "name" in coreCode) {
+    add("W", "家风内核", (coreCode as { name: string }).name);
+  }
+  const upgFrom = cd.W?.upgradeFrom?.value;
+  const upgTo = cd.W?.upgradeTo?.value;
+  if (upgFrom && upgTo) {
+    decisions.push({ moduleId: "W", tag: "升级", value: `${upgFrom} → ${upgTo}` });
+  }
+
+  // E
+  const values = cd.E?.coreValues?.value;
+  if (Array.isArray(values) && values.length > 0) {
+    add("E", "价值观", values.slice(0, 3).join("、"));
+  }
+  const dir = cd.E?.direction?.value;
+  if (typeof dir === "string") {
+    add("E", "方向", dir.split("·")[0]?.trim() || dir);
+  }
+
+  return decisions;
+}
+
+function extractPending(cd: CompassDataSchema, currentModuleId: string): Pending[] {
+  const pending: Pending[] = [];
+
+  // Only show pending for current and past modules
+  const moduleOrder = ["S", "N", "W", "E"];
+  const currentIdx = moduleOrder.indexOf(currentModuleId);
+
+  for (let i = 0; i <= currentIdx; i++) {
+    const mod = moduleOrder[i];
+    if (mod === "S") {
+      if (!cd.S?.capitalMatrix?.value) pending.push({ moduleId: "S", label: "资本矩阵" });
+      if (!cd.S?.priorityUpgrade?.value) pending.push({ moduleId: "S", label: "优先升级选择" });
+    }
+    if (mod === "N") {
+      if (!cd.N?.trendsRanked?.value) pending.push({ moduleId: "N", label: "趋势排序" });
+      if (!cd.N?.coreAbility?.value) pending.push({ moduleId: "N", label: "能力押注" });
+    }
+    if (mod === "W") {
+      if (!cd.W?.story?.value) pending.push({ moduleId: "W", label: "故事回忆" });
+      if (!cd.W?.coreCode?.value) pending.push({ moduleId: "W", label: "家风命名" });
+    }
+    if (mod === "E") {
+      if (!cd.E?.coreValues?.value) pending.push({ moduleId: "E", label: "价值观选择" });
+      if (!cd.E?.direction?.value) pending.push({ moduleId: "E", label: "战略方向" });
+    }
+  }
+
+  return pending;
+}
 
 // ═══════════════════════════════════════════════════════════
 //  A) ProgressSection
@@ -207,173 +288,91 @@ function ExportSection({
 }
 
 // ═══════════════════════════════════════════════════════════
-//  C) NotesSection + NoteItem
+//  C) Key Decisions
 // ═══════════════════════════════════════════════════════════
 
-function FactItem({
-  note,
-  onUpdate,
-  onDelete,
-}: {
-  note: Note;
-  onUpdate: (updates: Partial<Note>) => void;
-  onDelete: () => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(note.bullet);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-
-  useEffect(() => {
-    if (editing) inputRef.current?.focus();
-  }, [editing]);
-
-  const save = () => {
-    if (draft.trim()) {
-      onUpdate({ bullet: draft.trim(), updatedAt: new Date().toISOString() });
-    }
-    setEditing(false);
-  };
-
-  const cancel = () => {
-    setDraft(note.bullet);
-    setEditing(false);
-  };
-
-  return (
-    <div className="group relative rounded-lg bg-secondary/30 border border-transparent px-2.5 py-1.5 transition-colors">
-      <div className="flex items-center gap-1.5 mb-0.5">
-        <span className="text-[9px] text-muted-foreground/50 bg-secondary/50 rounded px-1 py-px">
-          {note.sourceLabel}
-        </span>
-      </div>
-
-      {editing ? (
-        <div className="space-y-1">
-          <textarea
-            ref={inputRef}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            rows={2}
-            className="w-full text-[12px] bg-background border border-border rounded px-2 py-1 outline-none resize-none focus:ring-1 focus:ring-primary/30"
-          />
-          <div className="flex gap-1">
-            <button onClick={save} className="p-0.5 text-completed hover:opacity-80"><Check size={11} /></button>
-            <button onClick={cancel} className="p-0.5 text-muted-foreground hover:opacity-80"><X size={11} /></button>
-          </div>
-        </div>
-      ) : (
-        <p className="text-[12px] leading-relaxed text-foreground font-medium">
-          {note.bullet}
-        </p>
-      )}
-
-      {!editing && (
-        <div className="absolute top-1 right-1 hidden group-hover:flex items-center gap-0.5">
-          <button onClick={() => setEditing(true)} className="p-0.5 rounded text-muted-foreground/40 hover:text-foreground transition-colors" title="编辑">
-            <Pencil size={10} />
-          </button>
-          <button onClick={onDelete} className="p-0.5 rounded text-muted-foreground/40 hover:text-red-500 transition-colors" title="删除">
-            <Trash2 size={10} />
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function InsightItem({ note }: { note: Note }) {
-  return (
-    <div className="rounded-lg bg-blue-50/50 border border-blue-200/30 px-2.5 py-1.5">
-      <div className="flex items-center gap-1 mb-0.5">
-        <Lightbulb size={9} className="text-blue-500" />
-        <span className="text-[9px] font-medium text-blue-600">AI解读</span>
-        <span className="text-[9px] text-muted-foreground/40 ml-auto">{note.sourceLabel}</span>
-      </div>
-      <p className="text-[11px] leading-relaxed text-foreground/70">
-        {note.bullet}
-      </p>
-    </div>
-  );
-}
-
-function MemoSection({
-  notes,
-  onUpdateNote,
-  onDeleteNote,
+function DecisionsSection({
+  decisions,
+  pending,
   started,
 }: {
-  notes: Note[];
-  onUpdateNote: (id: string, updates: Partial<Note>) => void;
-  onDeleteNote: (id: string) => void;
+  decisions: Decision[];
+  pending: Pending[];
   started: boolean;
 }) {
-  const [showInsights, setShowInsights] = useState(true);
-
-  const facts = notes.filter((n) => n.noteType === "fact");
-  const insights = notes.filter((n) => n.noteType === "insight");
+  if (!started) {
+    return (
+      <div className="bg-card rounded-xl border border-border p-3">
+        <h3 className="text-[13px] font-semibold text-foreground px-1 pt-0.5 pb-1.5">关键决策</h3>
+        <p className="text-[11px] text-muted-foreground/50 px-1 py-2">完成家庭代号后开始记录</p>
+      </div>
+    );
+  }
 
   return (
     <div className="bg-card rounded-xl border border-border p-3">
-      <h3 className="text-[13px] font-semibold text-foreground px-1 pt-0.5 pb-1.5 flex items-center gap-1.5">
-        <FileText size={13} />
-        咨询纪要
-      </h3>
+      <h3 className="text-[13px] font-semibold text-foreground px-1 pt-0.5 pb-1.5">关键决策</h3>
 
-      <div className="px-1">
-        {!started ? (
-          <p className="text-[11px] text-muted-foreground/50 py-2">
-            完成家庭代号后开始记录
-          </p>
-        ) : facts.length === 0 ? (
-          <p className="text-[11px] text-muted-foreground/50 py-2">
-            你的决策将实时出现在这里
-          </p>
-        ) : (
-          <div className="space-y-1.5">
-            {/* Fact memos */}
-            {facts.map((note) => (
-              <FactItem
-                key={note.id}
-                note={note}
-                onUpdate={(updates) => onUpdateNote(note.id, updates)}
-                onDelete={() => onDeleteNote(note.id)}
-              />
-            ))}
-
-            {/* AI Insights (collapsible) */}
-            {insights.length > 0 && (
-              <div className="pt-1">
-                <button
-                  onClick={() => setShowInsights(!showInsights)}
-                  className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors mb-1"
-                >
-                  {showInsights ? <EyeOff size={10} /> : <Eye size={10} />}
-                  {showInsights ? "隐藏" : "显示"} AI 洞察（{insights.length}）
-                </button>
-                {showInsights && (
-                  <div className="space-y-1">
-                    {insights.map((note) => (
-                      <InsightItem key={note.id} note={note} />
-                    ))}
-                  </div>
-                )}
+      {decisions.length === 0 && pending.length === 0 ? (
+        <p className="text-[11px] text-muted-foreground/50 px-1 py-2">你的决策将实时出现在这里</p>
+      ) : (
+        <div className="space-y-1 px-1">
+          {/* Completed decisions */}
+          {decisions.map((d, i) => (
+            <div key={i} className={`flex items-start gap-2 rounded-lg px-2 py-1.5 border ${MODULE_COLORS[d.moduleId] || "bg-secondary/30 text-foreground border-border"}`}>
+              <span className="text-[10px] font-bold shrink-0 mt-0.5">{MODULE_LABELS[d.moduleId] || d.moduleId}</span>
+              <div className="flex-1 min-w-0">
+                <span className="text-[11px] opacity-70">{d.tag}：</span>
+                <span className="text-[11px] font-medium">{d.value}</span>
               </div>
-            )}
-          </div>
-        )}
-      </div>
+            </div>
+          ))}
+
+          {/* Pending items */}
+          {pending.length > 0 && (
+            <div className="pt-1.5 border-t border-border mt-1.5">
+              <div className="flex items-center gap-1 mb-1">
+                <AlertCircle size={10} className="text-muted-foreground/50" />
+                <span className="text-[10px] text-muted-foreground/50">待完成</span>
+              </div>
+              {pending.map((p, i) => (
+                <div key={i} className="flex items-center gap-2 px-2 py-1 text-[11px] text-muted-foreground/60">
+                  <Circle size={8} className="shrink-0" />
+                  <span>{MODULE_LABELS[p.moduleId]}：{p.label}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 // ═══════════════════════════════════════════════════════════
-//  RightRail — combines all three sections
+//  RightRail
 // ═══════════════════════════════════════════════════════════
 
+const STEP_TO_MODULE: Record<StepId, string> = {
+  step1: "S", step2: "N", step3: "W", step4: "E",
+};
+
 const RightRail = (props: Props) => {
+  const completedModuleIds = props.completedSteps.map((s) => STEP_TO_MODULE[s]);
+  const currentModuleId = STEP_TO_MODULE[props.currentStep] || "S";
+
+  const decisions = useMemo(
+    () => extractDecisions(props.compassData, [...completedModuleIds, currentModuleId]),
+    [props.compassData, completedModuleIds.join(","), currentModuleId]
+  );
+
+  const pending = useMemo(
+    () => extractPending(props.compassData, currentModuleId),
+    [props.compassData, currentModuleId]
+  );
+
   return (
     <div className="h-full flex flex-col overflow-y-auto bg-background">
-      {/* A) 对话进度 — always visible, top */}
       <div className="p-4 pb-2">
         <ProgressSection
           currentStep={props.currentStep}
@@ -384,7 +383,6 @@ const RightRail = (props: Props) => {
         />
       </div>
 
-      {/* B) 导出家庭罗盘 — always visible, middle, collapsible */}
       <div className="px-4 pb-2">
         <ExportSection
           completedSteps={props.completedSteps}
@@ -392,12 +390,10 @@ const RightRail = (props: Props) => {
         />
       </div>
 
-      {/* C) 咨询纪要 — always visible, bottom */}
       <div className="px-4 pb-4 flex-1 min-h-0">
-        <MemoSection
-          notes={props.notes}
-          onUpdateNote={props.onUpdateNote}
-          onDeleteNote={props.onDeleteNote}
+        <DecisionsSection
+          decisions={decisions}
+          pending={pending}
           started={props.started}
         />
       </div>
