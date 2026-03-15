@@ -1333,21 +1333,25 @@ function getSmartTitle(convo: Conversation, cd?: CompassDataSchema): string {
   const code = convo.family_code;
 
   if (cd) {
+    // Extract short direction keyword (e.g. "创造" from "创造 · 向外开拓……")
+    const dirRaw = cd.E?.direction?.value as string | undefined;
+    const dir = dirRaw?.split("·")[0]?.trim();
+    // coreAbility is a string, not an array
+    const ability = cd.N?.coreAbility?.value as string | undefined;
+
     // Priority 1: direction × coreAbility · familyCode
-    const dir = cd.E?.direction?.value;
-    const ability = cd.N?.coreAbility?.value;
-    if (dir && ability?.length) {
-      return `${dir} × ${ability[0]}${code ? ` · ${code}` : ""}`;
+    if (dir && ability) {
+      return `${dir} × ${ability}${code ? ` · ${code}` : ""}`;
     }
 
     // Priority 2: trend → coreAbility · familyCode
-    const trend = cd.N?.trends?.value;
-    if (trend?.length && ability?.length) {
-      return `${trend[0]} → ${ability[0]}${code ? ` · ${code}` : ""}`;
+    const trends = cd.N?.trendsRanked?.value as string[] | undefined;
+    if (trends?.length && ability) {
+      return `${trends[0]} → ${ability}${code ? ` · ${code}` : ""}`;
     }
 
     // Priority 3: coreValues · familyCode
-    const values = cd.E?.coreValues?.value;
+    const values = cd.E?.coreValues?.value as string[] | undefined;
     if (values?.length) {
       const short = values.slice(0, 3).join("、");
       return `价值观：${short}${code ? ` · ${code}` : ""}`;
