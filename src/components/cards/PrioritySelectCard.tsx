@@ -37,9 +37,9 @@ const PrioritySelectCard = ({
   const [confirmed, setConfirmed] = useState(false);
 
   const handleConfirm = () => {
-    if (!selected) return;
+    if (!selected || !comment.trim()) return;
     setConfirmed(true);
-    onConfirm({ selected, comment: comment.trim() || undefined });
+    onConfirm({ selected, comment: comment.trim() });
   };
 
   if (confirmed || disabled) {
@@ -48,7 +48,7 @@ const PrioritySelectCard = ({
         <p className="text-[12px] text-muted-foreground mb-1">{question} · 已完成</p>
         <p className="text-[13px] font-medium text-primary">{selected}</p>
         {comment.trim() && (
-          <p className="text-[12px] text-muted-foreground mt-1">补充：{comment}</p>
+          <p className="text-[12px] text-muted-foreground mt-1">理由：{comment}</p>
         )}
       </div>
     );
@@ -143,16 +143,16 @@ const PrioritySelectCard = ({
         </button>
       </div>
 
-      {/* Optional comment — only appears after selection */}
+      {/* Reason — required, appears after selection */}
       {selected && (
         <div className="pt-1">
-          <label className="text-[11px] text-muted-foreground">补充说明（可选）</label>
-          <input
-            type="text"
+          <label className="text-[12px] font-medium text-foreground">我们的理由（请具体）：</label>
+          <textarea
             value={comment}
             onChange={(e) => setComment(e.target.value)}
-            placeholder={commentPlaceholder}
-            className="w-full bg-secondary/30 rounded-lg px-3 py-2 mt-1 text-[12px] outline-none placeholder:text-muted-foreground/40 focus:ring-1 focus:ring-primary/30"
+            rows={3}
+            placeholder="我们的朋友圈几乎都是同行业的家庭，孩子的同学圈也一样。我们想让他见识更多不同的人，所以优先升级社会资本，今年计划加入一个跨行业的家长社群。"
+            className="w-full bg-secondary/30 rounded-lg px-3 py-2 mt-1 text-[13px] outline-none placeholder:text-muted-foreground/40 focus:ring-1 focus:ring-primary/30 resize-none border border-border"
           />
         </div>
       )}
@@ -160,7 +160,7 @@ const PrioritySelectCard = ({
       <div className="flex justify-end pt-1">
         <button
           onClick={handleConfirm}
-          disabled={!selected}
+          disabled={!selected || !comment.trim()}
           className="px-5 py-2 rounded-lg text-[13px] font-medium transition-all bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           确认优先级 →
