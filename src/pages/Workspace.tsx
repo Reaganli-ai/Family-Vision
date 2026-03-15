@@ -1331,38 +1331,8 @@ const MODULE_NAMES = ["家底", "眼光", "根基", "共识"];
 
 function getSmartTitle(convo: Conversation, cd?: CompassDataSchema): string {
   const code = convo.family_code;
-
-  if (cd) {
-    // Extract short direction keyword (e.g. "创造" from "创造 · 向外开拓……")
-    const dirRaw = cd.E?.direction?.value as string | undefined;
-    const dir = dirRaw?.split("·")[0]?.trim();
-    // coreAbility is a string, not an array
-    const ability = cd.N?.coreAbility?.value as string | undefined;
-
-    // Priority 1: direction × coreAbility · familyCode
-    if (dir && ability) {
-      return `${dir} × ${ability}${code ? ` · ${code}` : ""}`;
-    }
-
-    // Priority 2: trend → coreAbility · familyCode
-    const trends = cd.N?.trendsRanked?.value as string[] | undefined;
-    if (trends?.length && ability) {
-      return `${trends[0]} → ${ability}${code ? ` · ${code}` : ""}`;
-    }
-
-    // Priority 3: coreValues · familyCode
-    const values = cd.E?.coreValues?.value as string[] | undefined;
-    if (values?.length) {
-      const short = values.slice(0, 3).join("、");
-      return `价值观：${short}${code ? ` · ${code}` : ""}`;
-    }
-  }
-
-  // Fallback
-  if (!convo.started) {
-    return `愿景工坊（未开始）${code ? ` · ${code}` : ""}`;
-  }
-  return convo.title || `愿景工坊${code ? ` · ${code}` : ""}`;
+  if (!convo.started) return code ? `${code} 家庭` : "新对话";
+  return code ? `${code} 家庭愿景` : "家庭愿景";
 }
 
 function getStatusText(convo: Conversation, cd?: CompassDataSchema): string {
