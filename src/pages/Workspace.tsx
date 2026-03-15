@@ -601,55 +601,49 @@ const Workspace = () => {
         // Fallback: if AI didn't return candidates, build from compass data
         if (!candidates?.length) {
           const cd = compassDataRef.current;
-          const story = cd.W?.story?.value || "";
-          const tag = cd.W?.storyPriorityTag?.value || "";
-          const heroes = cd.W?.heroTraits?.value || [];
-          const tradeoffs = cd.W?.tradeoffChoices?.value || [];
-          const quote = cd.W?.quoteChildhood?.value || "";
-          const quoteNow = cd.W?.quoteNow?.value || "";
-          const picks = Array.isArray(tradeoffs)
-            ? tradeoffs.map((t: { choice: string; labelA: string; labelB: string }) =>
-                t.choice === "A" ? t.labelA : t.labelB
-              )
-            : [];
-          // Generate 3 candidates from available data
+          const storyText = (cd.W?.story?.value as string) || "";
+          const tag = (cd.W?.storyPriorityTag?.value as string) || "";
+          const heroes = cd.W?.heroTraits?.value as string[] | undefined;
+          const quoteChild = (cd.W?.quoteChildhood?.value as string) || "";
+          const quoteNow = (cd.W?.quoteNow?.value as string) || "";
+          const themeTag = (cd.W?.quoteThemeTag?.value as string) || "";
+          const storyShort = storyText.length > 30 ? storyText.slice(0, 30) + "…" : storyText;
+
           const fallbackCandidates: { name: string; definition: string; evidence: Record<string, string> }[] = [];
+
+          // Candidate 1: from story priority tag (e.g. "规则原则" → "守规")
           if (tag) {
             fallbackCandidates.push({
-              name: tag,
-              definition: `以「${tag}」为核心的家族生存哲学`,
-              evidence: {
-                story: story ? story.slice(0, 30) + "…" : "—",
-                tradeoff: picks.join("、") || "—",
-                hero: Array.isArray(heroes) ? heroes.slice(0, 2).join("、") : "—",
-                quote: quote || quoteNow || "—",
-              },
+              name: tag.length <= 4 ? tag : tag.slice(0, 2),
+              definition: `家庭在关键时刻坚守「${tag}」的信念`,
+              evidence: { 故事: storyShort || "—", 口头禅: quoteChild || quoteNow || "—" },
             });
           }
+
+          // Candidate 2: from hero traits (e.g. "守信重诺")
           if (Array.isArray(heroes) && heroes[0]) {
             fallbackCandidates.push({
-              name: heroes[0],
-              definition: `崇尚「${heroes[0]}」精神，在困难中寻找突破`,
-              evidence: {
-                story: story ? story.slice(0, 30) + "…" : "—",
-                tradeoff: picks.join("、") || "—",
-                hero: heroes.slice(0, 2).join("、"),
-                quote: quote || quoteNow || "—",
-              },
+              name: heroes[0].length <= 4 ? heroes[0] : heroes[0].slice(0, 4),
+              definition: `以「${heroes[0]}」为精神基因，代代传承`,
+              evidence: { 英雄特质: heroes.slice(0, 2).join("、"), 故事: storyShort || "—" },
             });
           }
-          if (picks[0]) {
+
+          // Candidate 3: from quote theme or second hero trait
+          if (themeTag) {
             fallbackCandidates.push({
-              name: picks[0],
-              definition: `在取舍中坚定选择「${picks[0]}」的家庭策略`,
-              evidence: {
-                story: story ? story.slice(0, 30) + "…" : "—",
-                tradeoff: picks.join("、") || "—",
-                hero: Array.isArray(heroes) ? heroes.slice(0, 2).join("、") : "—",
-                quote: quote || quoteNow || "—",
-              },
+              name: themeTag.length <= 4 ? themeTag : themeTag.slice(0, 2),
+              definition: `用「${themeTag}」的力量面对生活的不确定`,
+              evidence: { 口头禅: `${quoteChild} → ${quoteNow}`.trim() || "—", 故事: storyShort || "—" },
+            });
+          } else if (Array.isArray(heroes) && heroes[1]) {
+            fallbackCandidates.push({
+              name: heroes[1].length <= 4 ? heroes[1] : heroes[1].slice(0, 4),
+              definition: `在「${heroes[1]}」中找到家庭的立足之本`,
+              evidence: { 英雄特质: heroes.slice(0, 3).join("、"), 故事: storyShort || "—" },
             });
           }
+
           if (fallbackCandidates.length > 0) candidates = fallbackCandidates;
         }
       }
@@ -681,9 +675,54 @@ const Workspace = () => {
       if (next.cardType === "flipside-fill" || next.cardType === "upgrade-path") {
         coreCodeName = compassDataRef.current.W?.coreCode?.value?.name;
       }
-      if (next.cardType === "flipside-fill" && structuredData) {
-        const sd = structuredData as { flipside?: { tags?: string[]; example?: string; benefits?: string[]; costs?: string[] } };
-        if (sd.flipside) flipsideSuggestions = sd.flipside;
+      if (next.cardType === "flipside-fill") {
+        // Try AI-generated suggestions first
+        if (structuredData) {
+          const sd = structuredData as { flipside?: { tags?: string[]; example?: string; benefits?: string[]; costs?: string[] } };
+          if (sd.flipside) flipsideSuggestions = sd.flipside;
+        }
+        // Fallback: generate from compass data if AI didn't return DATA
+        if (!flipsideSuggestions) {
+          const cd = compassDataRef.current;
+          const codeName = cd.W?.coreCode?.value?.name || "";
+          const storyText = (cd.W?.story?.value as string) || "";
+          const heroes = cd.W?.heroTraits?.value as string[] | undefined;
+          const storyShort = storyText.length > 40 ? storyText.slice(0, 40) + "…" : storyText;
+          // Generate contextual defaults
+          const tagMap: Record<string, string[]> = {
+            "规则原则": ["过度严格", "非黑即白"],
+            "守信重诺": ["过度承诺", "不懂拒绝"],
+            "韧性": ["硬扛不求助", "忽视情感"],
+            "决断力": ["冲动决策", "忽视风险"],
+            "信念": ["固执己见", "听不进劝"],
+            "信任": ["过度信任", "缺乏防备"],
+          };
+          const benefitMap: Record<string, string[]> = {
+            "规则原则": ["孩子有清晰的是非观", "家庭有底线和秩序", "做人有原则不随波逐流"],
+            "守信重诺": ["别人信任我们", "孩子学会负责任", "家庭信誉好"],
+            "韧性": ["抗压能力强", "遇事不慌", "能扛过困难期"],
+            "决断力": ["执行力强", "不拖延纠结", "抓住机会快"],
+            "信念": ["目标感强", "不轻易放弃", "给孩子榜样力量"],
+            "信任": ["家庭关系亲密", "沟通坦诚", "孩子有安全感"],
+          };
+          const costMap: Record<string, string[]> = {
+            "规则原则": ["孩子害怕犯错", "缺乏灵活变通", "亲子关系紧张"],
+            "守信重诺": ["给自己太大压力", "不敢说出真实想法", "牺牲自己成全承诺"],
+            "韧性": ["忽视身体和情感信号", "孩子不敢示弱", "累了也不休息"],
+            "决断力": ["决策前调研不足", "忽略家人感受", "偶尔踩坑"],
+            "信念": ["听不进不同意见", "给孩子太大压力", "过于理想化"],
+            "信任": ["容易被辜负", "缺乏防备心", "孩子可能太天真"],
+          };
+          const defaultTags = tagMap[codeName] || ["压力过大", "忽视感受"];
+          const defaultBenefits = benefitMap[codeName] || ["家庭有凝聚力", "孩子有方向感", "做事有章法"];
+          const defaultCosts = costMap[codeName] || ["可能给孩子压力", "缺乏弹性", "忽视个体差异"];
+          flipsideSuggestions = {
+            tags: defaultTags,
+            example: storyShort ? `比如在「${storyShort}」这样的情境下，可能会因为太坚持而忽略了其他声音` : `在日常生活中，「${codeName}」可能让我们对孩子要求过高`,
+            benefits: defaultBenefits,
+            costs: defaultCosts,
+          };
+        }
       }
 
       // For upgrade-path card: inject flipside context for smart defaults
