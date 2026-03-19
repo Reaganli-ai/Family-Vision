@@ -15,6 +15,29 @@ export interface AIState {
   stepComplete?: boolean;
 }
 
+export interface FeedbackContext {
+  conversationId: string | null;
+  familyCode: string;
+  stepId: string;
+  stepLabel: string;
+  phase: string;
+  nodeIndex: number;
+  nodeType: string;
+  cardType?: string;
+  url: string;
+  timestamp: string;
+}
+
+export interface FeedbackPayload {
+  area: string;
+  issueType: string;
+  description: string;
+  reproducibility?: string;
+  contact?: string;
+  context: FeedbackContext;
+  recentMessages: Array<{ role: "ai" | "user"; content: string }>;
+}
+
 function parseStateFromContent(content: string): {
   cleanContent: string;
   state: AIState | null;
@@ -108,4 +131,19 @@ export async function sendChatMessage(
   } catch (error) {
     onError(error instanceof Error ? error.message : "Unknown error");
   }
+}
+
+export async function submitFeedback(payload: FeedbackPayload): Promise<{ ok: boolean; feedbackId?: string }> {
+  const response = await fetch(`${API_BASE}/api/feedback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || `Feedback API error: ${response.status}`);
+  }
+
+  return response.json();
 }

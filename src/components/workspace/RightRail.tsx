@@ -4,8 +4,7 @@ import {
   Download,
   ChevronDown,
   ChevronUp,
-  Circle,
-  AlertCircle,
+  RotateCcw,
 } from "lucide-react";
 import {
   Dialog,
@@ -31,107 +30,152 @@ interface Props {
   onExport: () => void;
   compassData: CompassDataSchema;
   started: boolean;
+  saveState: "saved" | "saving" | "error";
+  lastSavedAt: Date | null;
+  saveError: string | null;
+  onRestartModule: (moduleIndex: number) => void;
 }
 
 const PHASES: PhaseId[] = ["collect", "deepen", "confirm"];
-
-const MODULE_COLORS: Record<string, string> = {
-  S: "bg-emerald-50 text-emerald-700 border-emerald-200",
-  N: "bg-blue-50 text-blue-700 border-blue-200",
-  W: "bg-amber-50 text-amber-700 border-amber-200",
-  E: "bg-purple-50 text-purple-700 border-purple-200",
-};
-
-const MODULE_LABELS: Record<string, string> = {
-  S: "家底",
-  N: "眼光",
-  W: "根基",
-  E: "共识",
+const PHASE_TIMELINE_LABELS: Record<PhaseId, string> = {
+  collect: "信息收集",
+  deepen: "追问深化",
+  confirm: "快照产出",
 };
 
 // ═══════════════════════════════════════════════════════════
 //  Data extraction
 // ═══════════════════════════════════════════════════════════
 
-interface Decision { moduleId: string; tag: string; value: string; }
-interface Pending { moduleId: string; label: string; }
-
-function extractDecisions(cd: CompassDataSchema, completedModules: string[]): Decision[] {
-  const decisions: Decision[] = [];
-  const add = (mod: string, tag: string, val: unknown) => {
-    if (!completedModules.includes(mod) && mod !== "_") return;
-    if (val && typeof val === "string" && val.length > 0) {
-      decisions.push({ moduleId: mod, tag, value: val });
-    }
-  };
-
-  // S
-  const matrix = cd.S?.capitalMatrix?.value;
-  if (Array.isArray(matrix) && matrix.length > 0) {
-    const summary = matrix.map((r: { label: string; level: string }) => `${r.label.slice(0, 2)}${r.level}`).join(" ");
-    decisions.push({ moduleId: "S", tag: "资本", value: summary });
-  }
-  add("S", "优先升级", cd.S?.priorityUpgrade?.value);
-
-  // N
-  const trends = cd.N?.trendsRanked?.value;
-  if (Array.isArray(trends) && trends.length > 0) {
-    add("N", "主假设", trends[0]);
-  }
-  add("N", "能力押注", cd.N?.coreAbility?.value);
-
-  // W
-  const coreCode = cd.W?.coreCode?.value;
-  if (coreCode && typeof coreCode === "object" && "name" in coreCode) {
-    add("W", "家风内核", (coreCode as { name: string }).name);
-  }
-  const upgFrom = cd.W?.upgradeFrom?.value;
-  const upgTo = cd.W?.upgradeTo?.value;
-  if (upgFrom && upgTo) {
-    decisions.push({ moduleId: "W", tag: "升级", value: `${upgFrom} → ${upgTo}` });
-  }
-
-  // E
-  const values = cd.E?.coreValues?.value;
-  if (Array.isArray(values) && values.length > 0) {
-    add("E", "价值观", values.slice(0, 3).join("、"));
-  }
-  const dir = cd.E?.direction?.value;
-  if (typeof dir === "string") {
-    add("E", "方向", dir.split("·")[0]?.trim() || dir);
-  }
-
-  return decisions;
+interface DigestSection {
+  id: "S" | "N" | "W" | "E";
+  title: string;
+  lines: string[];
 }
 
-function extractPending(cd: CompassDataSchema, currentModuleId: string): Pending[] {
-  const pending: Pending[] = [];
+function parseLevelScore(levelText: string): number {
+  const numericMatch = levelText.match(/\d+/);
+  if (numericMatch) return Number(numericMatch[0]);
+  if (levelText.includes("高")) return 3;
+  if (levelText.includes("中")) return 2;
+  if (levelText.includes("低")) return 1;
+  return 0;
+}
 
-  // Only show pending for current and past modules
-  const moduleOrder = ["S", "N", "W", "E"];
-  const currentIdx = moduleOrder.indexOf(currentModuleId);
+function buildDigestSections(
+  cd: CompassDataSchema,
+  visibleModuleIds: Array<"S" | "N" | "W" | "E">,
+): DigestSection[] {
+  const sections: DigestSection[] = [];
+  const moduleSequence: Array<"S" | "N" | "W" | "E"> = ["S", "N", "W", "E"];
+  const visibleSet = new Set(visibleModuleIds);
 
-  for (let i = 0; i <= currentIdx; i++) {
-    const mod = moduleOrder[i];
-    if (mod === "S") {
-      if (!cd.S?.capitalMatrix?.value) pending.push({ moduleId: "S", label: "资本矩阵" });
-      if (!cd.S?.priorityUpgrade?.value) pending.push({ moduleId: "S", label: "优先升级选择" });
+  const capitalMatrix = cd.S?.capitalMatrix?.value || [];
+  const priorityUpgrade = cd.S?.priorityUpgrade?.value;
+  const sLines: string[] = [];
+  if (capitalMatrix.length > 0) {
+    const sortedCapitals = [...capitalMatrix].sort(
+      (leftCapital, rightCapital) => parseLevelScore(rightCapital.level) - parseLevelScore(leftCapital.level),
+    );
+    const strongestCapital = sortedCapitals[0];
+    const weakerCapitalLabels = sortedCapitals
+      .slice(1)
+      .map((capitalItem) => capitalItem.label)
+      .join("和");
+    const homeStatusSentence = weakerCapitalLabels
+      ? `我现在了解了一下你们家的情况，目前家里的${strongestCapital.label}相对更扎实，${weakerCapitalLabels}还在继续补。`
+      : `我现在了解了一下你们家的情况，目前你们家的${strongestCapital.label}是最稳的一块。`;
+    sLines.push(homeStatusSentence);
+    if (priorityUpgrade) {
+      sLines.push(`你们已经把优先顺序放在${priorityUpgrade}，这说明你们知道先从哪里下手。`);
+    } else {
+      sLines.push("你们对家底已经有共识了，下一步只差把最先补的那一块定下来。");
     }
-    if (mod === "N") {
-      if (!cd.N?.trendsRanked?.value) pending.push({ moduleId: "N", label: "趋势排序" });
-      if (!cd.N?.coreAbility?.value) pending.push({ moduleId: "N", label: "能力押注" });
+    if (capitalMatrix.length > 1) {
+      sLines.push(`你们现在不是没有资源，而是在做取舍：先把短板补齐，再把优势放大。`);
     }
-    if (mod === "W") {
-      if (!cd.W?.story?.value) pending.push({ moduleId: "W", label: "故事回忆" });
-      if (!cd.W?.coreCode?.value) pending.push({ moduleId: "W", label: "家风命名" });
+  } else {
+    sLines.push("我正在帮你们梳理家底现状，先把经济资本、文化资本、社会资本各自的水平补齐后，这里会给出更完整的速记。");
+  }
+
+  const trendsRanked = cd.N?.trendsRanked?.value || [];
+  const coreAbility = cd.N?.coreAbility?.value;
+  const nLines: string[] = [];
+  if (trendsRanked.length > 0 || coreAbility) {
+    const trendsSentence = trendsRanked.length > 0
+      ? `在眼光这块，你们已经看到外部最关键的变化是${trendsRanked[0]}。`
+      : "在眼光这块，你们已经开始讨论外部变化对孩子成长的影响。";
+    nLines.push(trendsSentence);
+    if (trendsRanked.length > 1) {
+      nLines.push(`你们也意识到还存在${trendsRanked[1]}这样的变量，所以不是单点判断。`);
     }
-    if (mod === "E") {
-      if (!cd.E?.coreValues?.value) pending.push({ moduleId: "E", label: "价值观选择" });
-      if (!cd.E?.direction?.value) pending.push({ moduleId: "E", label: "战略方向" });
+    if (coreAbility) {
+      nLines.push(`对应地，你们想重点培养的核心能力是${coreAbility}，方向已经开始聚焦。`);
+    } else {
+      nLines.push("你们已经有趋势判断了，下一步把要重点培养的核心能力收拢成一句话就很完整了。");
+    }
+  } else {
+    nLines.push("这个板块会记录你们看到的外部变化，以及你们希望重点培养的能力，现在还在收集中。");
+  }
+
+  const coreCode = cd.W?.coreCode?.value;
+  const heroTraits = cd.W?.heroTraits?.value || [];
+  const upgradeFrom = cd.W?.upgradeFrom?.value;
+  const upgradeTo = cd.W?.upgradeTo?.value;
+  const wLines: string[] = [];
+  if (coreCode?.name || coreCode?.definition || heroTraits.length > 0 || upgradeFrom || upgradeTo) {
+    const codeSentence = coreCode?.name
+      ? `在根基这块，我读到你们家最核心的精神主线是${coreCode.name}。`
+      : "在根基这块，你们已经开始把家里的底层信念说清楚了。";
+    wLines.push(codeSentence);
+    if (coreCode?.definition) {
+      wLines.push(`你们对这条根基的解释是：${coreCode.definition}。`);
+    }
+    if (heroTraits.length > 0) {
+      wLines.push(`你们反复提到的家族气质是${heroTraits.slice(0, 2).join("和")}。`);
+    }
+    if (upgradeFrom && upgradeTo) {
+      wLines.push(`你们也在尝试把过去的${upgradeFrom}，慢慢调整成更适合下一代的${upgradeTo}。`);
+    }
+  } else {
+    wLines.push("这个板块会把你们家真正影响决策的底层信念沉淀出来，现在还在整理故事和线索。");
+  }
+
+  const coreValues = cd.E?.coreValues?.value || [];
+  const direction = cd.E?.direction?.value;
+  const anchors = cd.E?.anchors?.value;
+  const eLines: string[] = [];
+  if (coreValues.length > 0 || direction || anchors) {
+    const valueSentence = coreValues.length > 0
+      ? `在共识这块，你们已经收拢出几条核心价值，像${coreValues.slice(0, 2).join("和")}。`
+      : "在共识这块，你们已经开始把分散观点往同一个方向收拢。";
+    eLines.push(valueSentence);
+    if (direction) {
+      eLines.push(`目前你们更偏向的家庭方向是${direction}。`);
+    } else {
+      eLines.push("方向感已经有雏形了，再往前一步就是定下最终的共同方向。");
+    }
+    if (anchors) {
+      eLines.push(`你们最希望孩子具备的是${anchors.gift_to_child}，最担心缺少的是${anchors.fear_child_lacks}。`);
+    }
+  } else {
+    eLines.push("这个板块会沉淀你们最终一致认可的价值观和方向，现在还在形成过程中。");
+  }
+
+  const sectionById: Record<"S" | "N" | "W" | "E", DigestSection> = {
+    S: { id: "S", title: "现在的家底状况", lines: sLines },
+    N: { id: "N", title: "我们的眼光", lines: nLines },
+    W: { id: "W", title: "我们的根基", lines: wLines },
+    E: { id: "E", title: "我们的共识", lines: eLines },
+  };
+
+  for (const moduleId of moduleSequence) {
+    if (visibleSet.has(moduleId)) {
+      sections.push(sectionById[moduleId]);
     }
   }
 
-  return pending;
+  return sections;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -140,16 +184,34 @@ function extractPending(cd: CompassDataSchema, currentModuleId: string): Pending
 
 function ProgressSection({
   currentStep,
+  currentPhase,
   completedSteps,
   completedPhases,
   steps,
+  onRestartModule,
+  started,
+  saveState,
+  lastSavedAt,
+  saveError,
 }: {
   currentStep: StepId;
   currentPhase: PhaseId;
   completedSteps: StepId[];
   completedPhases: Record<StepId, PhaseId[]>;
   steps: StepInfo[];
+  onRestartModule: (moduleIndex: number) => void;
+  started: boolean;
+  saveState: "saved" | "saving" | "error";
+  lastSavedAt: Date | null;
+  saveError: string | null;
 }) {
+  const saveHintText =
+    saveState === "saving"
+      ? "保存中..."
+      : saveState === "error"
+      ? (saveError ? `保存异常：${saveError}` : "保存异常")
+      : (lastSavedAt ? `已保存 ${lastSavedAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}` : "已保存");
+
   const getStepIcon = (stepId: StepId) => {
     const isCompleted = completedSteps.includes(stepId);
     const isCurrent = currentStep === stepId;
@@ -160,40 +222,98 @@ function ProgressSection({
 
   return (
     <div className="bg-card rounded-xl border border-border p-3">
-      <h3 className="text-[14px] font-semibold text-foreground px-2 pt-1 pb-2">对话进度</h3>
+      <div className="flex items-center justify-between px-2 pt-1 pb-2">
+        <h3 className="text-[14px] font-semibold text-foreground">对话进度</h3>
+        <span className="text-[11px] text-muted-foreground/70">{saveHintText}</span>
+      </div>
       <div className="space-y-1">
         {steps.map((step) => {
           const completed = completedPhases[step.id] || [];
           const isCompleted = completedSteps.includes(step.id);
           const isCurrent = currentStep === step.id;
+          const currentPhaseIndex = PHASES.indexOf(currentPhase);
+          const shouldExpandTimeline = isCurrent;
+          const moduleIndex = steps.findIndex((s) => s.id === step.id);
+          const canRestart = started && moduleIndex >= 0 && (isCurrent || isCompleted);
 
           return (
-            <div
-              key={step.id}
-              className={`flex items-center gap-2.5 px-2 py-2 rounded-lg text-[13px] transition-colors ${
-                isCurrent
-                  ? "text-foreground font-medium bg-secondary/40"
-                  : isCompleted
-                  ? "text-foreground/80"
-                  : "text-disabled"
-              }`}
-            >
-              {getStepIcon(step.id)}
-              <span className="flex-1 text-left">{step.label}</span>
-              {isCurrent && (
-                <span className="text-[10px] text-primary font-medium">当前</span>
-              )}
-              {(isCurrent || isCompleted) && (
-                <div className="w-12 h-1.5 bg-border/50 rounded-full overflow-hidden">
-                  <div
-                    className="h-full rounded-full transition-all duration-300"
-                    style={{
-                      width: `${(completed.length / PHASES.length) * 100}%`,
-                      backgroundColor: isCompleted ? 'hsl(var(--completed))' : 'hsl(var(--primary))',
+            <div key={step.id} className="rounded-lg px-2 py-2">
+              <div
+                className={`flex items-center gap-2.5 text-[13px] transition-colors ${
+                  isCurrent
+                    ? "text-foreground font-medium bg-secondary/40 rounded-lg px-2 py-1.5"
+                    : isCompleted
+                    ? "text-foreground/80"
+                    : "text-disabled"
+                }`}
+              >
+                {getStepIcon(step.id)}
+                <span className="flex-1 text-left">{step.label}</span>
+                {isCurrent && (
+                  <span className="text-[10px] text-primary font-medium">当前</span>
+                )}
+                {canRestart && (
+                  <button
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onRestartModule(moduleIndex);
                     }}
-                  />
-                </div>
-              )}
+                    className="text-[10px] text-muted-foreground hover:text-foreground transition-colors px-1 py-0.5 rounded hover:bg-secondary"
+                    title="重开本模块"
+                  >
+                    <span className="inline-flex items-center gap-0.5">
+                      <RotateCcw size={10} />
+                      重开
+                    </span>
+                  </button>
+                )}
+                {(isCurrent || isCompleted) && (
+                  <div className="w-12 h-1.5 bg-border/50 rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all duration-300"
+                      style={{
+                        width: `${(completed.length / PHASES.length) * 100}%`,
+                        backgroundColor: isCompleted ? "hsl(var(--completed))" : "hsl(var(--primary))",
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div
+                className={`ml-5 overflow-hidden transition-all duration-200 ${
+                  shouldExpandTimeline
+                    ? "mt-1.5 max-h-24 opacity-100 pl-3 border-l border-border/70 space-y-1"
+                    : "mt-0 max-h-0 opacity-0 pl-0 border-l-0 space-y-0"
+                }`}
+              >
+                {PHASES.map((phaseId, phaseIndex) => {
+                  const isPhaseCompleted =
+                    isCompleted ||
+                    completed.includes(phaseId) ||
+                    (isCurrent && currentPhaseIndex > phaseIndex);
+                  const isPhaseCurrent = isCurrent && currentPhase === phaseId;
+                  const phaseTextClassName = isPhaseCompleted
+                    ? "text-foreground/70"
+                    : isPhaseCurrent
+                    ? "text-primary"
+                    : "text-muted-foreground/50";
+                  const phaseDotClassName = isPhaseCompleted
+                    ? "bg-completed"
+                    : isPhaseCurrent
+                    ? "bg-primary"
+                    : "bg-border";
+
+                  return (
+                    <div key={phaseId} className="flex items-center gap-2">
+                      <span className={`inline-block w-1.5 h-1.5 rounded-full ${phaseDotClassName}`} />
+                      <span className={`text-[11px] ${phaseTextClassName}`}>
+                        {PHASE_TIMELINE_LABELS[phaseId]}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           );
         })}
@@ -292,18 +412,18 @@ function ExportSection({
 // ═══════════════════════════════════════════════════════════
 
 function DecisionsSection({
-  decisions,
-  pending,
+  sections,
+  currentModuleId,
   started,
 }: {
-  decisions: Decision[];
-  pending: Pending[];
+  sections: DigestSection[];
+  currentModuleId: "S" | "N" | "W" | "E";
   started: boolean;
 }) {
   if (!started) {
     return (
       <div className="bg-card rounded-xl border border-border p-3">
-        <h3 className="text-[13px] font-semibold text-foreground px-1 pt-0.5 pb-1.5">关键决策</h3>
+        <h3 className="text-[13px] font-semibold text-foreground px-1 pt-0.5 pb-1.5">对话要点速记</h3>
         <p className="text-[11px] text-muted-foreground/50 px-1 py-2">完成家庭代号后开始记录</p>
       </div>
     );
@@ -311,38 +431,36 @@ function DecisionsSection({
 
   return (
     <div className="bg-card rounded-xl border border-border p-3">
-      <h3 className="text-[13px] font-semibold text-foreground px-1 pt-0.5 pb-1.5">关键决策</h3>
+      <h3 className="text-[13px] font-semibold text-foreground px-1 pt-0.5 pb-1.5">对话要点速记</h3>
 
-      {decisions.length === 0 && pending.length === 0 ? (
-        <p className="text-[11px] text-muted-foreground/50 px-1 py-2">你的决策将实时出现在这里</p>
+      {sections.length === 0 ? (
+        <p className="text-[11px] text-muted-foreground/50 px-1 py-2">对话推进后，这里会自动整理出你们的事实状态</p>
       ) : (
-        <div className="space-y-1 px-1">
-          {/* Completed decisions */}
-          {decisions.map((d, i) => (
-            <div key={i} className={`flex items-start gap-2 rounded-lg px-2 py-1.5 border ${MODULE_COLORS[d.moduleId] || "bg-secondary/30 text-foreground border-border"}`}>
-              <span className="text-[10px] font-bold shrink-0 mt-0.5">{MODULE_LABELS[d.moduleId] || d.moduleId}</span>
-              <div className="flex-1 min-w-0">
-                <span className="text-[11px] opacity-70">{d.tag}：</span>
-                <span className="text-[11px] font-medium">{d.value}</span>
+        <div className="space-y-2.5 px-1">
+          {sections.map((section) => (
+            <div
+              key={section.id}
+              className={`pt-1 first:pt-0 px-2.5 py-2 rounded-md ${
+                section.id === currentModuleId ? "bg-secondary/20" : "bg-transparent"
+              }`}
+            >
+              <p className={`text-[11px] font-semibold mb-1 ${
+                section.id === currentModuleId ? "text-foreground/90" : "text-muted-foreground/85"
+              }`}>
+                {section.title}
+                {section.id === currentModuleId && (
+                  <span className="ml-1.5 text-[10px] font-medium text-primary">当前</span>
+                )}
+              </p>
+              <div className="space-y-1">
+                {section.lines.map((lineText, lineIndex) => (
+                  <p key={`${section.id}-${lineIndex}`} className="text-[10px] leading-relaxed text-foreground/82">
+                    {lineText}
+                  </p>
+                ))}
               </div>
             </div>
           ))}
-
-          {/* Pending items */}
-          {pending.length > 0 && (
-            <div className="pt-1.5 border-t border-border mt-1.5">
-              <div className="flex items-center gap-1 mb-1">
-                <AlertCircle size={10} className="text-muted-foreground/50" />
-                <span className="text-[10px] text-muted-foreground/50">待完成</span>
-              </div>
-              {pending.map((p, i) => (
-                <div key={i} className="flex items-center gap-2 px-2 py-1 text-[11px] text-muted-foreground/60">
-                  <Circle size={8} className="shrink-0" />
-                  <span>{MODULE_LABELS[p.moduleId]}：{p.label}</span>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       )}
     </div>
@@ -353,22 +471,24 @@ function DecisionsSection({
 //  RightRail
 // ═══════════════════════════════════════════════════════════
 
-const STEP_TO_MODULE: Record<StepId, string> = {
-  step1: "S", step2: "N", step3: "W", step4: "E",
-};
-
 const RightRail = (props: Props) => {
-  const completedModuleIds = props.completedSteps.map((s) => STEP_TO_MODULE[s]);
-  const currentModuleId = STEP_TO_MODULE[props.currentStep] || "S";
+  const stepToModuleMap: Record<StepId, "S" | "N" | "W" | "E"> = {
+    step1: "S",
+    step2: "N",
+    step3: "W",
+    step4: "E",
+  };
+  const currentModuleId = stepToModuleMap[props.currentStep];
+  const completedModuleIds = props.completedSteps
+    .map((stepId) => stepToModuleMap[stepId])
+    .filter((moduleId): moduleId is "S" | "N" | "W" | "E" => Boolean(moduleId));
+  const visibleModuleIds: Array<"S" | "N" | "W" | "E"> = ["S", "N", "W", "E"].filter((moduleId) =>
+    completedModuleIds.includes(moduleId as "S" | "N" | "W" | "E") || moduleId === currentModuleId
+  ) as Array<"S" | "N" | "W" | "E">;
 
-  const decisions = useMemo(
-    () => extractDecisions(props.compassData, [...completedModuleIds, currentModuleId]),
-    [props.compassData, completedModuleIds.join(","), currentModuleId]
-  );
-
-  const pending = useMemo(
-    () => extractPending(props.compassData, currentModuleId),
-    [props.compassData, currentModuleId]
+  const digestSections = useMemo(
+    () => buildDigestSections(props.compassData, visibleModuleIds),
+    [props.compassData, visibleModuleIds.join(",")]
   );
 
   return (
@@ -380,6 +500,11 @@ const RightRail = (props: Props) => {
           completedSteps={props.completedSteps}
           completedPhases={props.completedPhases}
           steps={props.steps}
+          onRestartModule={props.onRestartModule}
+          started={props.started}
+          saveState={props.saveState}
+          lastSavedAt={props.lastSavedAt}
+          saveError={props.saveError}
         />
       </div>
 
@@ -392,8 +517,8 @@ const RightRail = (props: Props) => {
 
       <div className="px-4 pb-4 flex-1 min-h-0">
         <DecisionsSection
-          decisions={decisions}
-          pending={pending}
+          sections={digestSections}
+          currentModuleId={currentModuleId}
           started={props.started}
         />
       </div>

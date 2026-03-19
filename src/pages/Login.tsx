@@ -17,12 +17,19 @@ const Login = () => {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [showWechatToast, setShowWechatToast] = useState(false);
+  const [showPhoneToast, setShowPhoneToast] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   const handleWechatClick = () => {
     setShowWechatToast(true);
     setTimeout(() => setShowWechatToast(false), 3000);
+  };
+
+  const handlePhoneClick = () => {
+    setLoginMethod("email");
+    setShowPhoneToast(true);
+    setTimeout(() => setShowPhoneToast(false), 3000);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -94,6 +101,11 @@ const Login = () => {
           {t("wechatUnavailable")}
         </div>
       )}
+      {showPhoneToast && (
+        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-black/80 text-white px-6 py-3 rounded-lg shadow-lg z-50 text-sm">
+          {lang === "zh" ? "暂时只支持邮箱登录，手机号功能还在开发中" : "Email login only for now. Phone login is under development."}
+        </div>
+      )}
 
       {/* Main Content */}
       <div className="flex-1 flex items-center justify-center px-6 py-8">
@@ -112,7 +124,7 @@ const Login = () => {
           <div className="flex mb-5 border border-border rounded-full p-1 bg-muted/30">
             <button
               type="button"
-              onClick={() => setLoginMethod("phone")}
+              onClick={handlePhoneClick}
               className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-full text-xs font-medium transition-all ${
                 loginMethod === "phone"
                   ? "bg-white border-2 border-blue-500 text-foreground shadow-sm"

@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Check, X } from "lucide-react";
+import { useState, useMemo } from "react";
+import { Check } from "lucide-react";
 
 interface ValueItem {
   label: string;
@@ -65,30 +65,115 @@ const COLUMNS: ValueColumn[] = [
   },
 ];
 
+// Flat lookup for descriptions
+const LABEL_DESC = new Map(COLUMNS.flatMap((c) => c.items.map((i) => [i.label, i.description])));
+
+interface ConfirmData {
+  selfCore: string[];
+  selfDeferred: string[];
+  partnerCore?: string[];
+  partnerDeferred?: string[];
+  core: string[];
+  deferred: string[];
+  partnerSkipped: boolean;
+}
+
 interface Props {
-  onConfirm: (data: { core: string[]; deferred: string[] }) => void;
+  onConfirm: (data: ConfirmData) => void;
   disabled?: boolean;
 }
 
 const CORE_COUNT = 3;
 const DEFER_COUNT = 2;
-const TOTAL_NEEDED = CORE_COUNT + DEFER_COUNT;
+
+type Step = "self-core" | "self-deferred" | "partner-core" | "partner-deferred" | "consensus";
 
 const ValueGalleryCard = ({ onConfirm, disabled = false }: Props) => {
-  const [step, setStep] = useState<"core" | "deferred" | "done">("core");
-  const [core, setCore] = useState<Set<string>>(new Set());
-  const [deferred, setDeferred] = useState<Set<string>>(new Set());
+  const [step, setStep] = useState<Step>("self-core");
+  const [selfCore, setSelfCore] = useState<Set<string>>(new Set());
+  const [selfDeferred, setSelfDeferred] = useState<Set<string>>(new Set());
+  const [partnerCore, setPartnerCore] = useState<Set<string>>(new Set());
+  const [partnerDeferred, setPartnerDeferred] = useState<Set<string>>(new Set());
+  const [finalCore, setFinalCore] = useState<Set<string>>(new Set());
+  const [finalDeferred, setFinalDeferred] = useState<Set<string>>(new Set());
   const [confirmed, setConfirmed] = useState(false);
 
-  const toggleCore = (label: string) => {
-    setCore((prev) => {
+  // ── Consensus helpers ──
+  const consensusData = useMemo(() => {
+    const sc = Array.from(selfCore);
+    const pc = Array.from(partnerCore);
+    const sd = Array.from(selfDeferred);
+    const pd = Array.from(partnerDeferred);
+
+    const coreIntersection = sc.filter((v) => pc.includes(v));
+    const selfOnlyCore = sc.filter((v) => !pc.includes(v));
+    const partnerOnlyCore = pc.filter((v) => !sc.includes(v));
+    const deferredIntersection = sd.filter((v) => pd.includes(v));
+    const selfOnlyDeferred = sd.filter((v) => !pd.includes(v));
+    const partnerOnlyDeferred = pd.filter((v) => !sd.includes(v));
+
+    // Pool for final core: selfCore ∪ partnerCore
+    const corePool = [...new Set([...sc, ...pc])];
+    // Pool for final deferred: selfDeferred ∪ partnerDeferred
+    const deferredPool = [...new Set([...sd, ...pd])];
+
+    return {
+      coreIntersection,
+      selfOnlyCore,
+      partnerOnlyCore,
+      deferredIntersection,
+      selfOnlyDeferred,
+      partnerOnlyDeferred,
+      corePool,
+      deferredPool,
+    };
+  }, [selfCore, partnerCore, selfDeferred, partnerDeferred]);
+
+  // Initialize finalCore/finalDeferred when entering consensus
+  const enterConsensus = () => {
+    const {
+      coreIntersection,
+      selfOnlyCore,
+      partnerOnlyCore,
+      deferredIntersection,
+      selfOnlyDeferred,
+      partnerOnlyDeferred,
+    } = consensusData;
+
+    const defaultFinalCore: string[] = [];
+    for (const value of [...coreIntersection, ...selfOnlyCore, ...partnerOnlyCore]) {
+      if (defaultFinalCore.includes(value)) continue;
+      defaultFinalCore.push(value);
+      if (defaultFinalCore.length >= CORE_COUNT) break;
+    }
+
+    const defaultFinalDeferred: string[] = [];
+    for (const value of [...deferredIntersection, ...selfOnlyDeferred, ...partnerOnlyDeferred]) {
+      if (defaultFinalDeferred.includes(value)) continue;
+      if (defaultFinalCore.includes(value)) continue;
+      defaultFinalDeferred.push(value);
+      if (defaultFinalDeferred.length >= DEFER_COUNT) break;
+    }
+
+    setFinalCore(new Set(defaultFinalCore));
+    setFinalDeferred(new Set(defaultFinalDeferred));
+    setStep("consensus");
+  };
+
+  // ── Toggle helpers ──
+  const makeToggle = (
+    setter: React.Dispatch<React.SetStateAction<Set<string>>>,
+    max: number,
+    locked?: Set<string>,
+  ) => (label: string) => {
+    if (locked?.has(label)) return;
+    setter((prev) => {
       const next = new Set(prev);
       if (next.has(label)) {
         next.delete(label);
-      } else if (next.size < CORE_COUNT) {
+      } else if (next.size < max) {
         next.add(label);
       } else {
-        // Replace: remove oldest, add new
         const arr = Array.from(next);
         arr.shift();
         return new Set([...arr, label]);
@@ -97,28 +182,57 @@ const ValueGalleryCard = ({ onConfirm, disabled = false }: Props) => {
     });
   };
 
-  const toggleDeferred = (label: string) => {
-    if (core.has(label)) return; // can't defer a core pick
-    setDeferred((prev) => {
+  const toggleSelfCore = makeToggle(setSelfCore, CORE_COUNT);
+  const toggleSelfDeferred = makeToggle(setSelfDeferred, DEFER_COUNT, selfCore);
+  const togglePartnerCore = makeToggle(setPartnerCore, CORE_COUNT);
+  const togglePartnerDeferred = makeToggle(setPartnerDeferred, DEFER_COUNT, partnerCore);
+
+  const toggleFinalCore = (label: string) => {
+    if (!consensusData.corePool.includes(label)) return;
+    setFinalCore((prev) => {
       const next = new Set(prev);
-      if (next.has(label)) {
-        next.delete(label);
-      } else if (next.size < DEFER_COUNT) {
-        next.add(label);
-      } else {
-        const arr = Array.from(next);
-        arr.shift();
-        return new Set([...arr, label]);
-      }
+      if (next.has(label)) { next.delete(label); }
+      else if (next.size < CORE_COUNT) { next.add(label); }
       return next;
     });
   };
 
-  const handleConfirm = () => {
+  const toggleFinalDeferred = (label: string) => {
+    if (!consensusData.deferredPool.includes(label)) return;
+    if (finalCore.has(label)) return;
+    setFinalDeferred((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) { next.delete(label); }
+      else if (next.size < DEFER_COUNT) { next.add(label); }
+      return next;
+    });
+  };
+
+  // ── Confirm ──
+  const handleConfirm = (skipped: boolean) => {
     setConfirmed(true);
-    onConfirm({ core: Array.from(core), deferred: Array.from(deferred) });
+    if (skipped) {
+      onConfirm({
+        selfCore: Array.from(selfCore),
+        selfDeferred: Array.from(selfDeferred),
+        core: Array.from(selfCore),
+        deferred: Array.from(selfDeferred),
+        partnerSkipped: true,
+      });
+    } else {
+      onConfirm({
+        selfCore: Array.from(selfCore),
+        selfDeferred: Array.from(selfDeferred),
+        partnerCore: Array.from(partnerCore),
+        partnerDeferred: Array.from(partnerDeferred),
+        core: Array.from(finalCore),
+        deferred: Array.from(finalDeferred),
+        partnerSkipped: false,
+      });
+    }
   };
 
+  // ── Confirmed / disabled view ──
   if (confirmed || disabled) {
     return (
       <div className="bg-card border border-border rounded-xl p-4 opacity-80">
@@ -126,57 +240,220 @@ const ValueGalleryCard = ({ onConfirm, disabled = false }: Props) => {
         <div className="space-y-1.5">
           <div className="flex flex-wrap gap-1.5">
             <span className="text-[10px] text-muted-foreground mr-1">核心聚焦：</span>
-            {Array.from(core).map((v) => (
+            {Array.from(confirmed ? finalCore.size > 0 ? finalCore : selfCore : selfCore).map((v) => (
               <span key={v} className="text-[12px] bg-primary/10 text-primary px-2.5 py-1 rounded-full font-medium">{v}</span>
             ))}
           </div>
-          {deferred.size > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              <span className="text-[10px] text-muted-foreground mr-1">战略暂缓：</span>
-              {Array.from(deferred).map((v) => (
-                <span key={v} className="text-[12px] bg-secondary text-muted-foreground px-2.5 py-1 rounded-full">{v}</span>
-              ))}
-            </div>
-          )}
+          <div className="flex flex-wrap gap-1.5">
+            <span className="text-[10px] text-muted-foreground mr-1">战略暂缓：</span>
+            {Array.from(confirmed ? finalDeferred.size > 0 ? finalDeferred : selfDeferred : selfDeferred).map((v) => (
+              <span key={v} className="text-[12px] bg-secondary text-muted-foreground px-2.5 py-1 rounded-full">{v}</span>
+            ))}
+          </div>
         </div>
       </div>
     );
   }
 
-  const isCorePicking = step === "core";
-  const isDeferredPicking = step === "deferred";
+  // ── Which sets are active? ──
+  const isSelfCore = step === "self-core";
+  const isSelfDeferred = step === "self-deferred";
+  const isPartnerCore = step === "partner-core";
+  const isPartnerDeferred = step === "partner-deferred";
+  const isConsensus = step === "consensus";
+  const isSelfPhase = isSelfCore || isSelfDeferred;
+  const isPartnerPhase = isPartnerCore || isPartnerDeferred;
+
+  const activeCore = isSelfPhase ? selfCore : isPartnerPhase ? partnerCore : finalCore;
+  const activeDeferred = isSelfPhase ? selfDeferred : isPartnerPhase ? partnerDeferred : finalDeferred;
+  const isPickingCore = isSelfCore || isPartnerCore;
+  const isPickingDeferred = isSelfDeferred || isPartnerDeferred;
+
+  // ── Consensus panel ──
+  if (isConsensus) {
+    const { coreIntersection, selfOnlyCore, partnerOnlyCore, deferredIntersection, selfOnlyDeferred, partnerOnlyDeferred, corePool, deferredPool } = consensusData;
+    const availableDeferredPool = deferredPool.filter((value) => !finalCore.has(value));
+    const requiredDeferredCount = Math.min(DEFER_COUNT, availableDeferredPool.length);
+    const canConfirmConsensus = finalCore.size === CORE_COUNT && finalDeferred.size >= requiredDeferredCount;
+
+    return (
+      <div className="bg-card border-2 border-primary/20 rounded-xl p-5 space-y-4">
+        <div>
+          <p className="text-[14px] font-semibold text-foreground">先看共识和差异，再定最终一致</p>
+          <p className="text-[12px] text-muted-foreground mt-1 leading-relaxed">
+            先看双方已经一致的部分，再看核心差异，最后一起定下
+            {CORE_COUNT} 个核心聚焦和 {DEFER_COUNT} 个战略暂缓。
+          </p>
+        </div>
+
+        {/* Consensus / Difference display */}
+        <div className="space-y-3">
+          {coreIntersection.length > 0 && (
+            <div className="bg-emerald-50 rounded-lg p-3">
+              <p className="text-[12px] font-medium text-emerald-800 mb-1.5">1）双方共同选择（核心共识）</p>
+              <div className="flex flex-wrap gap-1.5">
+                {coreIntersection.map((v) => (
+                  <span key={v} className="text-[12px] bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-full font-medium">{v}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {(selfOnlyCore.length > 0 || partnerOnlyCore.length > 0) && (
+            <div className="bg-amber-50 rounded-lg p-3">
+              <p className="text-[12px] font-medium text-amber-800 mb-1.5">2）核心差异（你们各自更看重）</p>
+              <div className="space-y-1">
+                {selfOnlyCore.length > 0 && (
+                  <p className="text-[12px] text-amber-700">你选了：{selfOnlyCore.join("、")}</p>
+                )}
+                {partnerOnlyCore.length > 0 && (
+                  <p className="text-[12px] text-amber-700">伴侣选了：{partnerOnlyCore.join("、")}</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {deferredIntersection.length > 0 && (
+            <div className="bg-secondary/50 rounded-lg p-3">
+              <p className="text-[12px] font-medium text-muted-foreground mb-1.5">双方都同意暂缓</p>
+              <div className="flex flex-wrap gap-1.5">
+                {deferredIntersection.map((v) => (
+                  <span key={v} className="text-[12px] bg-secondary text-muted-foreground px-2.5 py-1 rounded-full">{v}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {(selfOnlyDeferred.length > 0 || partnerOnlyDeferred.length > 0) && (
+            <div className="bg-secondary/30 rounded-lg p-3">
+              <p className="text-[12px] font-medium text-muted-foreground mb-1.5">战略暂缓差异</p>
+              <div className="space-y-1">
+                {selfOnlyDeferred.length > 0 && (
+                  <p className="text-[12px] text-muted-foreground">你暂缓了：{selfOnlyDeferred.join("、")}</p>
+                )}
+                {partnerOnlyDeferred.length > 0 && (
+                  <p className="text-[12px] text-muted-foreground">伴侣暂缓了：{partnerOnlyDeferred.join("、")}</p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Final core selection from pool */}
+        <div className="space-y-2">
+          <p className="text-[12px] text-primary font-medium">
+            3）定下最终一致：{CORE_COUNT} 个核心聚焦（{finalCore.size}/{CORE_COUNT}）
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {corePool.map((v) => {
+              const isFinal = finalCore.has(v);
+              const inIntersection = coreIntersection.includes(v);
+              return (
+                <button
+                  key={v}
+                  onClick={() => toggleFinalCore(v)}
+                  className={`px-3 py-1.5 rounded-lg text-[12px] font-medium transition-all border ${
+                    isFinal
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border bg-secondary/30 text-muted-foreground hover:bg-secondary/50"
+                  }`}
+                >
+                  {v}
+                  {inIntersection && <span className="text-[10px] ml-1 opacity-60">共识</span>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Final deferred selection from pool */}
+        <div className="space-y-2">
+          <p className="text-[12px] text-primary font-medium">
+            定下最终一致：{DEFER_COUNT} 个战略暂缓（{finalDeferred.size}/{DEFER_COUNT}）
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {deferredPool.filter((v) => !finalCore.has(v)).map((v) => {
+              const isFinal = finalDeferred.has(v);
+              const inIntersection = deferredIntersection.includes(v);
+              return (
+                <button
+                  key={v}
+                  onClick={() => toggleFinalDeferred(v)}
+                  className={`px-3 py-1.5 rounded-lg text-[12px] font-medium transition-all border ${
+                    isFinal
+                      ? "border-gray-400 bg-gray-100 text-gray-700"
+                      : "border-border bg-secondary/30 text-muted-foreground hover:bg-secondary/50"
+                  }`}
+                >
+                  {v}
+                  {inIntersection && <span className="text-[10px] ml-1 opacity-60">共识</span>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="flex justify-end gap-2 pt-1">
+          <button
+            onClick={() => setStep("partner-core")}
+            className="px-4 py-2 rounded-lg text-[13px] text-muted-foreground border border-border hover:bg-secondary/50 transition-colors"
+          >
+            ← 返回修改
+          </button>
+          <button
+            onClick={() => handleConfirm(false)}
+            disabled={!canConfirmConsensus}
+            className="px-5 py-2 rounded-lg text-[13px] font-medium bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+          >
+            确认最终一致 →
+          </button>
+        </div>
+        {!canConfirmConsensus && (
+          <p className="text-[11px] text-muted-foreground text-right">
+            还需选择：核心聚焦 {finalCore.size}/{CORE_COUNT}
+            ，战略暂缓 {finalDeferred.size}/{requiredDeferredCount}
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  // ── Gallery picking phase (self or partner) ──
+  const title = isSelfPhase
+    ? "请选出你最看重的价值观"
+    : "现在请伴侣来选";
+  const subtitle = isSelfPhase
+    ? "核心聚焦 = 未来 12 个月优先投入；战略暂缓 = 重要但先放一放。"
+    : "请把设备交给伴侣，独立完成选择。";
 
   return (
     <div className="bg-card border-2 border-primary/20 rounded-xl p-5 space-y-4">
       {/* Title */}
       <div>
-        <p className="text-[14px] font-semibold text-foreground">
-          请凭直觉选 {CORE_COUNT} 个【核心聚焦】+ {DEFER_COUNT} 个【战略暂缓】
-        </p>
-        <p className="text-[12px] text-muted-foreground mt-1 leading-relaxed">
-          核心聚焦 = 未来 12 个月优先投入；战略暂缓 = 重要但先放一放。
-        </p>
+        <p className="text-[14px] font-semibold text-foreground">{title}</p>
+        <p className="text-[12px] text-muted-foreground mt-1 leading-relaxed">{subtitle}</p>
       </div>
 
       {/* Step indicator */}
       <div className="flex items-center gap-3 text-[12px]">
         <span className={`px-3 py-1 rounded-full font-medium transition-colors ${
-          isCorePicking ? "bg-primary text-primary-foreground" : core.size === CORE_COUNT ? "bg-completed/10 text-completed" : "bg-secondary text-muted-foreground"
+          isPickingCore ? "bg-primary text-primary-foreground" : activeCore.size === CORE_COUNT ? "bg-completed/10 text-completed" : "bg-secondary text-muted-foreground"
         }`}>
-          ① 核心聚焦 {core.size}/{CORE_COUNT}
+          ① 核心聚焦 {activeCore.size}/{CORE_COUNT}
         </span>
         <span className={`px-3 py-1 rounded-full font-medium transition-colors ${
-          isDeferredPicking ? "bg-primary text-primary-foreground" : deferred.size === DEFER_COUNT ? "bg-completed/10 text-completed" : "bg-secondary text-muted-foreground"
+          isPickingDeferred ? "bg-primary text-primary-foreground" : activeDeferred.size === DEFER_COUNT ? "bg-completed/10 text-completed" : "bg-secondary text-muted-foreground"
         }`}>
-          ② 战略暂缓 {deferred.size}/{DEFER_COUNT}
+          ② 战略暂缓 {activeDeferred.size}/{DEFER_COUNT}
         </span>
       </div>
 
-      {/* Instruction for current step */}
+      {/* Instruction */}
       <p className="text-[12px] text-primary font-medium">
-        {isCorePicking
-          ? `→ 先选 ${CORE_COUNT} 个你们最看重的价值观`
-          : `→ 再选 ${DEFER_COUNT} 个"重要但先放一放"的价值观`}
+        {isPickingCore
+          ? `→ 选 ${CORE_COUNT} 个最看重的价值观`
+          : `→ 选 ${DEFER_COUNT} 个"重要但先放一放"的价值观`}
       </p>
 
       {/* 4-column grid */}
@@ -188,25 +465,22 @@ const ValueGalleryCard = ({ onConfirm, disabled = false }: Props) => {
             </div>
             <div className="p-2 space-y-1.5">
               {col.items.map((item) => {
-                const isCore = core.has(item.label);
-                const isDeferred = deferred.has(item.label);
-                const isSelected = isCore || isDeferred;
-                // In deferred step, core picks are locked
-                const isLocked = isDeferredPicking && isCore;
+                const isCore = activeCore.has(item.label);
+                const isDef = activeDeferred.has(item.label);
+                const isSelected = isCore || isDef;
+                const isLocked = isPickingDeferred && isCore;
 
                 return (
                   <button
                     key={item.label}
                     onClick={() => {
                       if (isLocked) return;
-                      if (isCorePicking) {
-                        toggleCore(item.label);
+                      if (isPickingCore) {
+                        if (isSelfCore) toggleSelfCore(item.label);
+                        else togglePartnerCore(item.label);
                       } else {
-                        if (isDeferred) {
-                          toggleDeferred(item.label);
-                        } else if (!isCore) {
-                          toggleDeferred(item.label);
-                        }
+                        if (isSelfDeferred) toggleSelfDeferred(item.label);
+                        else togglePartnerDeferred(item.label);
                       }
                     }}
                     className={`w-full flex items-start gap-2 px-2.5 py-2 rounded-lg text-left transition-all ${
@@ -220,12 +494,12 @@ const ValueGalleryCard = ({ onConfirm, disabled = false }: Props) => {
                     <div className={`mt-0.5 w-4 h-4 rounded flex-shrink-0 flex items-center justify-center border transition-all ${
                       isCore
                         ? col.checkClass + " border-transparent"
-                        : isDeferred
+                        : isDef
                         ? "border-gray-400 bg-gray-400 border-transparent"
                         : "border-gray-300 bg-white"
                     }`}>
                       {isCore && <Check size={10} className="text-white" strokeWidth={3} />}
-                      {isDeferred && <span className="text-[8px] text-white font-bold">缓</span>}
+                      {isDef && <span className="text-[8px] text-white font-bold">缓</span>}
                     </div>
                     <div className="min-w-0">
                       <p className={`text-[12px] font-medium ${isSelected ? "text-foreground" : "text-foreground/80"}`}>
@@ -245,32 +519,40 @@ const ValueGalleryCard = ({ onConfirm, disabled = false }: Props) => {
 
       {/* Selected summary */}
       <div className="bg-secondary/40 rounded-lg px-4 py-3 space-y-2">
-        {core.size > 0 && (
+        {activeCore.size > 0 && (
           <div>
-            <p className="text-[11px] text-muted-foreground mb-1">核心聚焦（{core.size}/{CORE_COUNT}）</p>
+            <p className="text-[11px] text-muted-foreground mb-1">核心聚焦（{activeCore.size}/{CORE_COUNT}）</p>
             <div className="flex flex-wrap gap-1.5">
-              {Array.from(core).map((v) => (
+              {Array.from(activeCore).map((v) => (
                 <span
                   key={v}
-                  onClick={() => { if (isCorePicking) toggleCore(v); }}
+                  onClick={() => {
+                    if (isPickingCore) {
+                      if (isSelfCore) toggleSelfCore(v);
+                      else togglePartnerCore(v);
+                    }
+                  }}
                   className={`text-[11px] bg-primary/10 text-primary px-2.5 py-1 rounded-full font-medium ${
-                    isCorePicking ? "cursor-pointer hover:bg-primary/20" : ""
+                    isPickingCore ? "cursor-pointer hover:bg-primary/20" : ""
                   } transition-colors`}
                 >
-                  {v} {isCorePicking && "×"}
+                  {v} {isPickingCore && "×"}
                 </span>
               ))}
             </div>
           </div>
         )}
-        {deferred.size > 0 && (
+        {activeDeferred.size > 0 && (
           <div>
-            <p className="text-[11px] text-muted-foreground mb-1">战略暂缓（{deferred.size}/{DEFER_COUNT}）</p>
+            <p className="text-[11px] text-muted-foreground mb-1">战略暂缓（{activeDeferred.size}/{DEFER_COUNT}）</p>
             <div className="flex flex-wrap gap-1.5">
-              {Array.from(deferred).map((v) => (
+              {Array.from(activeDeferred).map((v) => (
                 <span
                   key={v}
-                  onClick={() => toggleDeferred(v)}
+                  onClick={() => {
+                    if (isSelfDeferred) toggleSelfDeferred(v);
+                    else if (isPartnerDeferred) togglePartnerDeferred(v);
+                  }}
                   className="text-[11px] bg-secondary text-muted-foreground px-2.5 py-1 rounded-full cursor-pointer hover:bg-secondary/80 transition-colors"
                 >
                   {v} ×
@@ -279,36 +561,78 @@ const ValueGalleryCard = ({ onConfirm, disabled = false }: Props) => {
             </div>
           </div>
         )}
-        {core.size === 0 && deferred.size === 0 && (
+        {activeCore.size === 0 && activeDeferred.size === 0 && (
           <p className="text-[11px] text-muted-foreground/50">点击上方卡片开始选择</p>
         )}
       </div>
 
       {/* Action buttons */}
       <div className="flex justify-end gap-2 pt-1">
-        {isCorePicking && core.size === CORE_COUNT && (
+        {/* self-core → self-deferred */}
+        {isSelfCore && activeCore.size === CORE_COUNT && (
           <button
-            onClick={() => setStep("deferred")}
+            onClick={() => setStep("self-deferred")}
             className="px-5 py-2 rounded-lg text-[13px] font-medium bg-primary text-primary-foreground hover:opacity-90 transition-all"
           >
             下一步：选战略暂缓 →
           </button>
         )}
-        {isDeferredPicking && (
+
+        {/* self-deferred → partner or skip */}
+        {isSelfDeferred && (
           <>
             <button
-              onClick={() => setStep("core")}
+              onClick={() => setStep("self-core")}
               className="px-4 py-2 rounded-lg text-[13px] text-muted-foreground border border-border hover:bg-secondary/50 transition-colors"
             >
               ← 返回修改
             </button>
+            {activeDeferred.size === DEFER_COUNT && (
+              <>
+                <button
+                  onClick={() => handleConfirm(true)}
+                  className="px-4 py-2 rounded-lg text-[13px] text-muted-foreground border border-border hover:bg-secondary/50 transition-colors"
+                >
+                  只有我一人，确认
+                </button>
+                <button
+                  onClick={() => setStep("partner-core")}
+                  className="px-5 py-2 rounded-lg text-[13px] font-medium bg-primary text-primary-foreground hover:opacity-90 transition-all"
+                >
+                  伴侣也来选 →
+                </button>
+              </>
+            )}
+          </>
+        )}
+
+        {/* partner-core → partner-deferred */}
+        {isPartnerCore && activeCore.size === CORE_COUNT && (
+          <button
+            onClick={() => setStep("partner-deferred")}
+            className="px-5 py-2 rounded-lg text-[13px] font-medium bg-primary text-primary-foreground hover:opacity-90 transition-all"
+          >
+            下一步：选战略暂缓 →
+          </button>
+        )}
+
+        {/* partner-deferred → consensus */}
+        {isPartnerDeferred && (
+          <>
             <button
-              onClick={handleConfirm}
-              disabled={deferred.size < DEFER_COUNT}
-              className="px-5 py-2 rounded-lg text-[13px] font-medium bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              onClick={() => setStep("partner-core")}
+              className="px-4 py-2 rounded-lg text-[13px] text-muted-foreground border border-border hover:bg-secondary/50 transition-colors"
             >
-              确认价值观 →
+              ← 返回修改
             </button>
+            {activeDeferred.size === DEFER_COUNT && (
+              <button
+                onClick={enterConsensus}
+                className="px-5 py-2 rounded-lg text-[13px] font-medium bg-primary text-primary-foreground hover:opacity-90 transition-all"
+              >
+                进入共识整理 →
+              </button>
+            )}
           </>
         )}
       </div>

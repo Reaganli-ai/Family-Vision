@@ -23,6 +23,11 @@ export const field = <T>(value: T, source: FieldSource): TrackedField<T> => ({
 
 export interface CompassDataSchema {
   familyCode?: TrackedField<string>;
+  checkpoints?: Record<string, {
+    completedAt: string;
+    snapshot: string;
+    cursorAtSave: { module: number; node: number };
+  }>;
 
   S?: {
     capitalMatrix?: TrackedField<{ label: string; level: string; keyword: string }[]>;
@@ -45,6 +50,7 @@ export interface CompassDataSchema {
   W?: {
     // Q1
     story?: TrackedField<string>;
+    /** @deprecated No longer collected by StoryInputCard. Kept for backward compatibility with existing data. */
     storyPriorityTag?: TrackedField<string>;
     // Q2
     tradeoffChoices?: TrackedField<{ axisId: string; labelA: string; labelB: string; choice: "A" | "B" }[]>;
@@ -73,10 +79,18 @@ export interface CompassDataSchema {
 
   E?: {
     anchors?: TrackedField<{ gift_to_child: string; fear_child_lacks: string }>;
+    // Dual-person value gallery
+    selfCore?: TrackedField<string[]>;
+    selfDeferred?: TrackedField<string[]>;
+    partnerCore?: TrackedField<string[]>;
+    partnerDeferred?: TrackedField<string[]>;
+    partnerSkipped?: TrackedField<boolean>;
+    // Final consensus (downstream consumers use these)
     coreValues?: TrackedField<string[]>;
     deferredValues?: TrackedField<string[]>;
     agreeDisagree?: TrackedField<string>;
     direction?: TrackedField<string>;
+    directionReason?: TrackedField<string>;
     snapshot?: TrackedField<string>;
   };
 
@@ -140,9 +154,8 @@ export function updateCompassFromCard(
     case "W": {
       if (!next.W) next.W = {};
       if (cardType === "story-input") {
-        const d = cardData as { story: string; priorityTag?: string };
+        const d = cardData as { story: string };
         next.W.story = field(d.story, "user_typed");
-        if (d.priorityTag) next.W.storyPriorityTag = field(d.priorityTag, "user_selected");
       } else if (cardType === "tradeoff-choice") {
         next.W.tradeoffChoices = field(
           cardData as { axisId: string; labelA: string; labelB: string; choice: "A" | "B" }[],
@@ -190,17 +203,27 @@ export function updateCompassFromCard(
           "user_typed",
         );
       } else if (cardType === "value-gallery") {
-        const d = cardData as { core: string[]; deferred: string[] };
+        const d = cardData as {
+          selfCore: string[]; selfDeferred: string[];
+          partnerCore?: string[]; partnerDeferred?: string[];
+          core: string[]; deferred: string[];
+          partnerSkipped: boolean;
+        };
+        next.E.selfCore = field(d.selfCore, "user_selected");
+        next.E.selfDeferred = field(d.selfDeferred, "user_selected");
+        if (d.partnerCore) next.E.partnerCore = field(d.partnerCore, "user_selected");
+        if (d.partnerDeferred) next.E.partnerDeferred = field(d.partnerDeferred, "user_selected");
+        next.E.partnerSkipped = field(d.partnerSkipped, "user_selected");
         next.E.coreValues = field(d.core, "user_selected");
         next.E.deferredValues = field(d.deferred, "user_selected");
       } else if (cardType === "agree-disagree") {
         const d = cardData as { agreed: boolean; reason?: string };
         next.E.agreeDisagree = field(d.agreed ? "同意" : `不同意：${d.reason || ""}`, "user_selected");
       } else if (cardType === "single-select") {
-        // Extract direction keyword from full option text
-        const raw = cardData as string;
-        const dirMatch = raw.match(/^(内核|创造|连接)/);
-        next.E.direction = field(dirMatch?.[1] || raw, "user_selected");
+        const d = cardData as { selected: string; reason?: string };
+        const dirMatch = d.selected.match(/^(内核|创造|连接)/);
+        next.E.direction = field(dirMatch?.[1] || d.selected, "user_selected");
+        if (d.reason) next.E.directionReason = field(d.reason, "user_typed");
       } else if (cardType === "snapshot") {
         next.E.snapshot = field(cardData as string, "ai_inferred");
       }
@@ -253,24 +276,33 @@ export function generateSnapshotFromFields(
     }
 
     case "W": {
-      // Use w-templates buildWSnapshot for comprehensive snapshot
-      const tradeoffs = data.W?.tradeoffChoices?.value;
-      let tradeoffSummary: string | undefined;
-      if (tradeoffs?.length) {
-        tradeoffSummary = tradeoffs.map((t) => `${t.choice === "A" ? t.labelA : t.labelB}`).join("；");
-      }
-      // Import inline to avoid circular dep
-      const lines: string[] = [];
-      const story = data.W?.story?.value;
-      if (story) lines.push(`家族故事：${story.slice(0, 80)}${story.length > 80 ? "…" : ""}`);
-      if (tradeoffSummary) lines.push(`默认取舍：${tradeoffSummary}`);
-      const heroTraits = data.W?.heroTraits?.value;
-      if (heroTraits?.length) lines.push(`英雄基因：${heroTraits.join("、")}`);
+      // Word template: 底层代码 / 源于看重 / 继承内核 / 升级形式
       const coreCode = data.W?.coreCode?.value;
-      if (coreCode) lines.push(`家风内核：${coreCode.name}（${coreCode.definition}）`);
-      const finalStmt = data.W?.finalStatement?.value;
-      if (finalStmt) lines.push(`\n升级宣言：${finalStmt}`);
-      return lines.join("\n") || "（数据不足，无法生成快照）";
+      const codeName = coreCode?.name || "尚未明确";
+      const codeDef = coreCode?.definition || "仍在摸索";
+      const keepVal = data.W?.upgradeKeep?.value || "待补充";
+      const toVal = data.W?.upgradeTo?.value || "待补充";
+
+      let text = `我们家族的底层代码，可能是一种「${codeName}」的生存哲学。`;
+      text += `它源于对「${codeDef}」的看重。`;
+      text += `我们决心，在继承其「${keepVal}」内核的同时，`;
+      text += `勇敢地将其表现形式升级为「${toVal}」，以托举孩子的未来。`;
+
+      // Supplementary details for context
+      const supplements: string[] = [];
+      const story = data.W?.story?.value;
+      if (story) supplements.push(`故事线索：${story.slice(0, 80)}${story.length > 80 ? "…" : ""}`);
+      const tradeoffs = data.W?.tradeoffChoices?.value;
+      if (tradeoffs?.length) {
+        supplements.push(`取舍倾向：${tradeoffs.map((t) => `${t.choice === "A" ? t.labelA : t.labelB}`).join("；")}`);
+      }
+      const heroTraits = data.W?.heroTraits?.value;
+      if (heroTraits?.length) supplements.push(`英雄基因：${heroTraits.join("、")}`);
+
+      if (supplements.length) {
+        text += `\n\n---\n${supplements.join("\n")}`;
+      }
+      return text;
     }
 
     case "E": {
@@ -278,6 +310,7 @@ export function generateSnapshotFromFields(
       const core = data.E?.coreValues?.value;
       const deferred = data.E?.deferredValues?.value;
       const dir = data.E?.direction?.value;
+      const dirReason = data.E?.directionReason?.value;
       let text = "";
       if (anchors) {
         text += `直觉锚点：最希望孩子拥有「${anchors.gift_to_child}」，最怕缺少「${anchors.fear_child_lacks}」\n`;
@@ -285,6 +318,7 @@ export function generateSnapshotFromFields(
       if (core) text += `核心价值观：${core.join("、")}\n`;
       if (deferred) text += `战略暂缓：${deferred.join("、")}\n`;
       text += `战略方向：${dir || "（未选择）"}`;
+      if (dirReason) text += `（${dirReason}）`;
       return text;
     }
 

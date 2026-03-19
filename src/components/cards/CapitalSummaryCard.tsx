@@ -1,5 +1,3 @@
-import { useState } from "react";
-
 /**
  * Deterministic summary card that renders a templated description
  * based on the capital matrix L-values. No AI, no drift.
@@ -69,9 +67,6 @@ function getHighlightText(rows: CapitalRow[]): string {
 }
 
 const CapitalSummaryCard = ({ rows, onConfirm, disabled }: Props) => {
-  const [comment, setComment] = useState("");
-  const [showComment, setShowComment] = useState(false);
-
   const summaryLines = buildSummary(rows);
   const highlightText = getHighlightText(rows);
 
@@ -88,7 +83,7 @@ const CapitalSummaryCard = ({ rows, onConfirm, disabled }: Props) => {
     );
   }
 
-  // Single-step: summary + optional comment + confirm/disagree
+  // Single-step: summary + confirm
   return (
     <div className="bg-card rounded-xl border-2 border-primary/20 p-5 space-y-4 max-w-lg">
       <div>
@@ -111,46 +106,12 @@ const CapitalSummaryCard = ({ rows, onConfirm, disabled }: Props) => {
 
       <div className="border-t border-border pt-3 space-y-3">
         <p className="text-[13px] font-medium text-foreground">以上总结符合你们家吗？</p>
-
-        {showComment ? (
-          <textarea
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-            placeholder="说说哪里不太对，或者补充你的想法……"
-            rows={2}
-            maxLength={300}
-            autoFocus
-            className="w-full border border-border rounded-lg px-3 py-2 text-[13px] outline-none resize-none focus:ring-1 focus:ring-primary/30 placeholder:text-muted-foreground/40"
-          />
-        ) : null}
-
-        <div className="flex gap-2">
-          <button
-            onClick={() => onConfirm(true, undefined, comment.trim() || undefined)}
-            className="flex-1 text-[13px] font-medium bg-foreground text-background rounded-lg py-2.5 hover:opacity-90 transition-opacity"
-          >
-            {comment.trim() ? "提交并继续 →" : "符合，继续 →"}
-          </button>
-          {!showComment ? (
-            <button
-              onClick={() => setShowComment(true)}
-              className="flex-1 text-[13px] text-muted-foreground border border-border rounded-lg py-2.5 hover:bg-secondary/50 transition-colors"
-            >
-              不太对 / 想补充
-            </button>
-          ) : (
-            <button
-              onClick={() => { setShowComment(false); setComment(""); }}
-              className="text-[13px] text-muted-foreground border border-border rounded-lg px-4 py-2.5 hover:bg-secondary/50 transition-colors"
-            >
-              收起
-            </button>
-          )}
-        </div>
-
-        <p className="text-[11px] text-muted-foreground/60 text-center">
-          也可以直接在下方聊天框里打字告诉我
-        </p>
+        <button
+          onClick={() => onConfirm(true)}
+          className="w-full text-[13px] font-medium bg-foreground text-background rounded-lg py-2.5 hover:opacity-90 transition-opacity"
+        >
+          符合，继续 →
+        </button>
       </div>
     </div>
   );

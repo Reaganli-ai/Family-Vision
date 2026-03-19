@@ -1,12 +1,146 @@
 import Anthropic from "@anthropic-ai/sdk";
 import express from "express";
 import cors from "cors";
+import { createClient } from "@supabase/supabase-js";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
+function createFeedbackId() {
+  return `fb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getSupabaseAdminClient() {
+  const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const supabaseServiceRoleKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SERVICE_KEY ||
+    process.env.SERVICE_ROLE_KEY;
+
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error("Supabase admin env missing: SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY");
+  }
+
+  return createClient(supabaseUrl, supabaseServiceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
+
+async function resolveUserIdByConversationId(supabaseAdmin, conversationId) {
+  if (!conversationId) return null;
+  const { data, error } = await supabaseAdmin
+    .from("conversations")
+    .select("user_id")
+    .eq("id", conversationId)
+    .single();
+  if (error) {
+    console.warn("[feedback] resolve user_id failed:", error.message);
+    return null;
+  }
+  return data?.user_id || null;
+}
+
+async function forwardFeedbackToWebhook(payload) {
+  const webhookUrl = process.env.FEEDBACK_WEBHOOK_URL;
+  if (!webhookUrl) return;
+  try {
+    await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    console.error("[feedback] webhook forward failed:", error);
+  }
+}
+
 const anthropic = new Anthropic();
+
+const AXIS_DEFINITIONS = [
+  { axis_id: "integrity-vs-result", triggers: ["诚信", "守信", "承诺", "厚道", "信用", "说到做到"], fallbackKeyword: "诚信底线" },
+  { axis_id: "safety-vs-growth", triggers: ["风险", "安全", "保守", "稳", "冒险", "谨慎"], fallbackKeyword: "稳健取舍" },
+  { axis_id: "rules-vs-relations", triggers: ["规矩", "规则", "人情", "关系", "情义", "讲理"], fallbackKeyword: "规矩与人情" },
+  { axis_id: "achievement-vs-balance", triggers: ["成绩", "最好", "优秀", "卓越", "平衡", "压力"], fallbackKeyword: "成就与平衡" },
+  { axis_id: "obedience-vs-expression", triggers: ["听话", "表达", "独立", "服从", "反思"], fallbackKeyword: "服从与表达" },
+  { axis_id: "face-vs-authenticity", triggers: ["面子", "真实", "体面", "坦诚", "自尊"], fallbackKeyword: "面子与真实" },
+];
+
+const HERO_TRAIT_LIBRARY = [
+  { label: "守信重诺", description: "答应的事会尽力做到", triggers: ["诚信", "守信", "承诺", "信用", "说到做到"] },
+  { label: "稳健审慎", description: "权衡风险后再行动", triggers: ["风险", "安全", "保守", "稳", "谨慎"] },
+  { label: "重情守义", description: "讲原则也讲情分", triggers: ["人情", "关系", "情义", "规矩"] },
+  { label: "追求卓越", description: "做事希望达到更高标准", triggers: ["成绩", "最好", "优秀", "卓越"] },
+  { label: "独立担当", description: "遇事先承担再反思", triggers: ["独立", "担当", "反思", "自己"] },
+  { label: "真诚坦荡", description: "真实表达，不做表面功夫", triggers: ["真实", "坦诚", "面子", "体面"] },
+];
+
+function normalizeText(text) {
+  return (text || "").replace(/\s+/g, "").toLowerCase();
+}
+
+function extractStoryKeywords(sourceText) {
+  const keywords = [];
+  const pushUnique = (word) => {
+    if (!word) return;
+    if (!keywords.includes(word)) keywords.push(word);
+  };
+  const keywordCandidates = ["诚信", "守信", "承诺", "厚道", "风险", "稳健", "规矩", "人情", "成绩", "平衡", "独立", "反思", "真实"];
+  for (const candidate of keywordCandidates) {
+    if (sourceText.includes(candidate)) pushUnique(candidate);
+    if (keywords.length >= 4) break;
+  }
+  if (keywords.length < 2) {
+    pushUnique("价值取舍");
+    pushUnique("家庭底线");
+  }
+  return keywords.slice(0, 4);
+}
+
+function buildW03FallbackData(messages) {
+  const latestUserMessage = [...(messages || [])]
+    .reverse()
+    .find((message) => message?.role === "user" && typeof message?.content === "string")
+    ?.content || "";
+  const normalizedUserText = normalizeText(latestUserMessage);
+
+  const matchedAxes = [];
+  for (const axisDefinition of AXIS_DEFINITIONS) {
+    const matchedTrigger = axisDefinition.triggers.find((trigger) => normalizedUserText.includes(trigger));
+    if (!matchedTrigger) continue;
+    matchedAxes.push({ axis_id: axisDefinition.axis_id, keyword: matchedTrigger });
+    if (matchedAxes.length >= 3) break;
+  }
+  if (matchedAxes.length < 2) {
+    for (const axisDefinition of AXIS_DEFINITIONS) {
+      if (matchedAxes.some((axis) => axis.axis_id === axisDefinition.axis_id)) continue;
+      matchedAxes.push({ axis_id: axisDefinition.axis_id, keyword: axisDefinition.fallbackKeyword });
+      if (matchedAxes.length >= 2) break;
+    }
+  }
+
+  const heroTraits = [];
+  const pushHeroTrait = (heroTrait) => {
+    if (heroTraits.some((item) => item.label === heroTrait.label)) return;
+    heroTraits.push({ label: heroTrait.label, description: heroTrait.description });
+  };
+  for (const heroTrait of HERO_TRAIT_LIBRARY) {
+    const hasTrigger = heroTrait.triggers.some((trigger) => normalizedUserText.includes(trigger));
+    if (!hasTrigger) continue;
+    pushHeroTrait(heroTrait);
+    if (heroTraits.length >= 4) break;
+  }
+  if (heroTraits.length < 2) {
+    pushHeroTrait(HERO_TRAIT_LIBRARY[0]);
+    pushHeroTrait(HERO_TRAIT_LIBRARY[1]);
+  }
+
+  return {
+    axes: matchedAxes.slice(0, 3),
+    story_keywords: extractStoryKeywords(latestUserMessage),
+    hero_traits: heroTraits.slice(0, 4),
+  };
+}
 
 const SYSTEM_PROMPT = `你是"彼灯教育·家庭愿景工坊"的 AI 导师。
 
@@ -47,13 +181,47 @@ const SYSTEM_PROMPT = `你是"彼灯教育·家庭愿景工坊"的 AI 导师。
 注意：N-05（诊断三段论）和 N-07（快照）由前端模板生成，不经过 AI。
 
 ### 模块 W（根基）— 13 节点
-- W-01: 过渡开场。肯定前两个模块的成果，引出"家族精神内核"——代代相传的生存哲学。说"接下来请在卡片中回忆一个关键瞬间"。不要重复卡片里的问题。
-- W-03: 接住用户的故事和归因标签。你的任务是从故事中提取关键词，并从冲突轴库中选 2-3 组最相关的取舍轴。
+- W-01: **多轮引导对话（2-4 轮）**。你的角色是家庭战略咨询师，通过追问帮用户"挖"出家族的底层行为模式。不要急着收结论，要帮用户打开记忆。
+
+  **轮次控制规则**：
+  - 至少完成 2 轮对话后才允许发 <!--READY-->
+  - 最多 4 轮对话后必须发 <!--READY-->
+  - 每轮只问一件事
+  - 判断素材是否足够：需要有"具体事件 + 情绪/态度 + 行为反应"
+
+  **判断当前是第几轮的方法**：看对话历史中，在 W-01 阶段用户回复了几条消息。如果用户还没回复过，这是第 1 轮。
+
+  **第 1 轮（开场引导）**：
+  肯定前两个模块的成果，然后引入"精神考古"。问：
+  "先从记忆开始——你觉得你自己的父母（也就是孩子的爷爷奶奶或外公外婆），他们经常在家里说的话是什么？或者你小时候，印象很深的一次冲突、批评、或者让你特别骄傲的瞬间？不用想太完整，先随便聊聊。"
+
+  **第 2 轮（聚焦具体场景）**：根据用户回答追问——
+  - 如果用户说了口头禅 → "这句话背后，有没有一个具体的事情让你印象特别深？当时发生了什么？"
+  - 如果用户说了冲突/事件 → "当时你或家人是怎么反应的？最后怎么处理的？"
+  - 如果用户说了笼统感受 → "能不能想一个具体的瞬间？比如某次吃饭时、某个重要决定时？"
+
+  **第 3 轮（深挖价值取舍，如果素材足够可跳过直接 READY）**：
+  "听你说这个故事，我感觉你们家在那个瞬间，其实是把「A」看得比「B」更重要——"然后给一个你的判断，问用户对不对。
+  可以引用以下对比帮打开思路（选最相关的 1 个）：
+  · 关于诚信与利益："咱宁可吃亏，也不能占没良心的便宜" vs "别那么死板，能拿到是你的本事"
+  · 关于风险与安全："不要瞎折腾，安安稳稳的最好" vs "去做吧，失败了算我的"
+  · 关于规则与人情："规矩是死的，人是活的" vs "再亲的人，借钱也要打借条"
+  · 关于个人与集体："家里的事，关起门来说" vs 孩子受委屈时先问"你是不是先惹别人了？"
+
+  **第 4 轮（兜底收尾）**：
+  简短总结你从对话中听到的核心模式（1-2句），然后说"好的，我大致理解了。现在请在下面的卡片里，把你的故事用 1-3 句话写下来。"必须带 <!--READY-->。
+
+  **READY 信号规则**：
+  - 当你认为已经收集到足够素材（有具体事件+情绪+行为），在回复末尾加 <!--READY-->
+  - 说 READY 时要自然过渡到卡片："现在请在下面的卡片里，把你印象最深的那个瞬间用 1-3 句话写下来"
+  - <!--READY--> 必须是回复的最后一行，用户看不到这个标记
+- W-03: 接住用户的故事。你的任务是：1) 从故事中提取关键词并选取舍轴；2) 基于故事推断家族英雄特质。
   **你必须在回复末尾输出结构化数据，格式：**
-  <!--DATA:{"axes":[{"axis_id":"轴ID","keyword":"从故事提取的关键词"},...],"story_keywords":["关键词1","关键词2"]}-->
-  可用的 axis_id：integrity-vs-result, safety-vs-growth, rules-vs-relations, achievement-vs-balance, obedience-vs-expression, face-vs-authenticity
-  关键词必须来自用户原话，不要编造。最少选 2 组，最多 3 组。
+  <!--DATA:{"axes":[{"axis_id":"轴ID","keyword":"从故事提取的关键词"},...], "hero_traits":[{"label":"特质名(2-4字)","description":"一句话说明(10字内)"},...], "story_keywords":["关键词1","关键词2"]}-->
+  axes 规则：可用的 axis_id：integrity-vs-result, safety-vs-growth, rules-vs-relations, achievement-vs-balance, obedience-vs-expression, face-vs-authenticity。关键词必须来自用户原话，不要编造。最少选 2 组，最多 3 组。
+  hero_traits 规则：基于故事中体现的行为模式，推断家族最受尊敬的人可能具备的 4-6 个特质。每个特质用 2-4 字命名 + 10 字内说明。必须贴合用户故事，不要用通用模板。
   回复正文简短接住故事（2-3句），然后说"我帮你把故事翻译成几个取舍点，请在下方卡片中确认"。
+  **⚠️ <!--DATA:...-->必须作为回复的最后一行输出，这是前端渲染卡片的唯一数据来源，缺失则卡片无法正常显示。**
 - W-07: 综合用户在 Q1（故事）、Q2（取舍）、Q3（英雄）、Q4（口头禅）的所有数据，提炼 3-5 个"家风内核"候选命名。
   每个候选必须包含 name（2-4字中性策略命名）、definition（一句话定义）、evidence（引用 Q1-Q4 的具体数据作为依据）。
   **你必须在回复末尾输出结构化数据，格式：**
@@ -72,8 +240,8 @@ const SYSTEM_PROMPT = `你是"彼灯教育·家庭愿景工坊"的 AI 导师。
 ### 模块 E（共识）
 - E-01: 引导做直觉锚定，说"请在下方卡片中凭直觉填写"。不要重复卡片里的问题。
 - E-03: 接住直觉回答，简短回应，说"接下来请在价值观画廊中选出你们家最看重的价值观"。不要列出选项，卡片会自动出现。
-- E-05: 分析用户选择的价值观分布模式，对比直觉锚定和画廊选择的一致性/差异，追问一轮。不要问卡片已经问过的问题。
-- E-08: 汇总生成快照。
+- E-05: 分析用户选择的价值观分布模式，对比直觉锚定和画廊选择的一致性/差异。如果用户消息中包含"我选的"和"伴侣选的"（即双人模式），重点分析两人选择的交集与差异，指出可能的价值观张力或互补，并点评共识结果的取舍逻辑。追问一轮。不要问卡片已经问过的问题。
+- E-08: 汇总生成共识快照。必须整合以下数据：(1) 直觉锚点（最希望孩子拥有什么、最怕缺少什么）(2) 核心价值观和战略暂缓 (3) 如果是双人模式（用户消息中出现"我选的"和"伴侣选的"），点明双方选择的关键差异及最终共识取舍 (4) 战略方向及用户给出的理由。快照应像一段完整的共识宣言，不要用列表格式。
 
 ### 快照生成规则（必须严格遵守）
 当 nodeId 为 S-08, E-08 时，你必须在回复末尾生成快照（N、W 模块快照由前端模板生成）。格式：
@@ -114,6 +282,7 @@ app.post("/api/chat", async (req, res) => {
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
 
+    let streamedText = "";
     const stream = anthropic.messages.stream({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 512,
@@ -126,8 +295,17 @@ app.post("/api/chat", async (req, res) => {
         event.type === "content_block_delta" &&
         event.delta.type === "text_delta"
       ) {
+        streamedText += event.delta.text;
         res.write(`data: ${JSON.stringify({ text: event.delta.text })}\n\n`);
       }
+    }
+
+    const isW03 = flowContext?.nodeId === "W-03";
+    const missingDataTag = !streamedText.includes("<!--DATA:");
+    if (isW03 && missingDataTag) {
+      const fallbackPayload = buildW03FallbackData(messages);
+      const fallbackDataTag = `<!--DATA:${JSON.stringify(fallbackPayload)}-->`;
+      res.write(`data: ${JSON.stringify({ text: fallbackDataTag })}\n\n`);
     }
 
     res.write("data: [DONE]\n\n");
@@ -142,6 +320,68 @@ app.post("/api/chat", async (req, res) => {
       );
       res.end();
     }
+  }
+});
+
+app.post("/api/feedback", async (req, res) => {
+  const {
+    area,
+    issueType,
+    description,
+    reproducibility,
+    contact,
+    context,
+    recentMessages,
+  } = req.body || {};
+
+  if (!description || typeof description !== "string" || !description.trim()) {
+    return res.status(400).json({ error: "description is required" });
+  }
+
+  const feedbackRecord = {
+    id: createFeedbackId(),
+    area: typeof area === "string" ? area : "未分类",
+    issueType: typeof issueType === "string" ? issueType : "其他",
+    description: description.trim(),
+    reproducibility: typeof reproducibility === "string" ? reproducibility : undefined,
+    contact: typeof contact === "string" ? contact : undefined,
+    context: context || {},
+    recentMessages: Array.isArray(recentMessages) ? recentMessages : [],
+    receivedAt: new Date().toISOString(),
+  };
+
+  try {
+    const supabaseAdmin = getSupabaseAdminClient();
+    const conversationId = context?.conversationId || null;
+    const resolvedUserId = await resolveUserIdByConversationId(supabaseAdmin, conversationId);
+    const insertPayload = {
+      id: feedbackRecord.id,
+      user_id: resolvedUserId,
+      conversation_id: conversationId,
+      area: feedbackRecord.area,
+      issue_type: feedbackRecord.issueType,
+      description: feedbackRecord.description,
+      reproducibility: feedbackRecord.reproducibility || null,
+      contact: feedbackRecord.contact || null,
+      context: feedbackRecord.context || {},
+      recent_messages: feedbackRecord.recentMessages || [],
+      source: "in_app_widget",
+      created_at: feedbackRecord.receivedAt,
+    };
+
+    const { error } = await supabaseAdmin.from("feedbacks").insert(insertPayload);
+    if (error) {
+      console.error("[feedback] supabase insert failed:", error);
+      return res.status(500).json({ error: "failed to store feedback" });
+    }
+
+    await forwardFeedbackToWebhook(feedbackRecord);
+    return res.status(200).json({ ok: true, feedbackId: feedbackRecord.id });
+  } catch (error) {
+    console.error("[feedback] submit failed:", error);
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "feedback submit failed",
+    });
   }
 });
 
@@ -190,8 +430,20 @@ const REPORT_SYSTEM_PROMPT = `你是"彼灯教育·家庭战略罗盘"的报告�
    输出格式：从价值观方向出发，说明它如何"着色"资本运用和精神传承。
    示例：既然选择"创造优先"的价值观（E），那么在使用"稳健经济资本"（S）时，就会更倾向于将其作为"创新试错的风险投资基金"，而非"保值储蓄"。
 
-4. **strength_risk**（优势与风险）：基于以上三个交叉分析，指出当前家庭定位的最大优势和最大风险
+4. **strength_risk**（优势与风险）：基于以上三个交叉分析，指出当前家庭定位的最大优势和最大风险。如果 facts 中包含 W.flipsideTags，应将家风副作用作为风险来源之一。
 5. **strategic_summary**（战略整合）：四模块交叉后的一句话战略定位总结
+
+### 必须引用的字段绑定（based_on 中必须包含对应 fact ID，前提是该字段在 facts 中存在且 value 不为 null）
+- tension_resolve 必须在 based_on 中包含 W.tradeoffChoices（如果存在），并在 content 中分析取舍倾向对矛盾化解的影响
+- tension_resolve 必须在 based_on 中包含 W.upgradeKeep 和 W.upgradeTo（如果存在），并引用"保留…升级为…"的路径
+- philosophy_anchor 必须在 based_on 中包含 E.directionReason（如果存在），并在 content 中引用用户给出的理由原文
+- strength_risk 必须在 based_on 中包含 W.flipsideTags（如果存在），并将家风副作用作为风险来源之一
+
+### 单人/双人模式
+- 如果 facts 中存在 E.selfCore 和 E.partnerCore（即双人模式）：
+  - philosophy_anchor 必须在 based_on 中包含 E.selfCore 和 E.partnerCore，并明确分析双方选择的差异（如"一方更看重X，另一方更看重Y"）和最终共识的取舍逻辑
+  - vision_statement 使用"我们"措辞，体现双方共识
+- 如果 facts 中不存在这些字段（即单人模式）：使用"你的价值选择"措辞，不要提及"双方共识"或"伴侣"。vision_statement 使用"我们家"视角（代表家庭整体，但不暗示双人协商过程）。
 
 ### drafts（3 个）— 愿景生成与行动
 
@@ -260,8 +512,19 @@ function assembleFacts(compassData) {
     value: `${cd.W.coreCode.value?.name}（${cd.W.coreCode.value?.definition}）${cd.W.coreCode.value?.userEdited ? " [用户改写]" : ""}`,
     source: cd.W.coreCode.source,
   } : null, "W");
+  add("W.tradeoffChoices", "取舍倾向", cd.W?.tradeoffChoices ? {
+    value: (cd.W.tradeoffChoices.value || [])
+      .map(t => `在「${t.labelA} vs ${t.labelB}」上更偏向${t.choice === "A" ? t.labelA : t.labelB}`)
+      .join("；"),
+    source: cd.W.tradeoffChoices.source,
+  } : null, "W");
+  add("W.flipsideTags", "家风副作用", cd.W?.flipsideTags, "W");
   add("W.flipsideBenefit", "家风好处", cd.W?.flipsideBenefit, "W");
   add("W.flipsideCost", "家风代价", cd.W?.flipsideCost, "W");
+  add("W.upgradeKeep", "升级保留", cd.W?.upgradeKeep, "W");
+  add("W.upgradeReduce", "升级减少", cd.W?.upgradeReduce, "W");
+  add("W.upgradeFrom", "升级起点", cd.W?.upgradeFrom, "W");
+  add("W.upgradeTo", "升级方向", cd.W?.upgradeTo, "W");
   add("W.finalStatement", "升级宣言", cd.W?.finalStatement, "W");
 
   // E
@@ -272,6 +535,15 @@ function assembleFacts(compassData) {
   add("E.coreValues", "核心价值观", cd.E?.coreValues, "E");
   add("E.deferredValues", "战略暂缓", cd.E?.deferredValues, "E");
   add("E.direction", "战略方向", cd.E?.direction, "E");
+  add("E.directionReason", "方向理由", cd.E?.directionReason, "E");
+
+  // 双人模式：传入各自选择，让报告 AI 能分析差异
+  if (cd.E?.partnerSkipped?.value === false) {
+    add("E.selfCore", "我的核心价值观", cd.E?.selfCore, "E");
+    add("E.selfDeferred", "我的战略暂缓", cd.E?.selfDeferred, "E");
+    add("E.partnerCore", "伴侣的核心价值观", cd.E?.partnerCore, "E");
+    add("E.partnerDeferred", "伴侣的战略暂缓", cd.E?.partnerDeferred, "E");
+  }
 
   return facts;
 }
@@ -372,18 +644,50 @@ app.post("/api/report", async (req, res) => {
 ${factsJson}
 \`\`\`
 
-请根据这些 facts 生成 insights 和 drafts。严格按以下 JSON 格式输出：
+请根据这些 facts 生成 insights 和 drafts。
+
+重要规则：based_on 只能引用上方 facts 中实际存在且 value 不为 null 的 fact ID。如果某个字段在 facts 中不存在或 value 为 null，不要将其放入 based_on。
+如果上方 facts 中存在 E.selfCore 和 E.partnerCore（即双人模式），则 philosophy_anchor 的 based_on 必须包含这两个 fact ID，并在 content 中分析双方选择的差异与最终共识取舍。
+
+严格按以下 JSON 格式输出：
 
 {
   "insights": [
     {
       "id": "opportunity_match",
       "title": "机遇匹配（S×N）",
-      "content": "...",
-      "based_on": ["S.xxx", "N.xxx"],
-      "confidence": "high|medium|low"
+      "content": "你们家「xxx资本」最适合用来培养「xxx能力」...",
+      "based_on": ["S.capital_文化资本", "N.coreAbility"],
+      "confidence": "high"
     },
-    ...共 5 条
+    {
+      "id": "tension_resolve",
+      "title": "矛盾化解（W×N）",
+      "content": "家族「xxx」的精神内核与未来需要「xxx」存在张力...取舍倾向显示...升级路径是保留...升级为...",
+      "based_on": ["W.coreCode", "N.coreAbility", "W.tradeoffChoices", "W.upgradeKeep", "W.upgradeTo"],
+      "confidence": "medium"
+    },
+    {
+      "id": "philosophy_anchor",
+      "title": "哲学锚定（E×S×W）",
+      "content": "选择「xxx」方向是因为（引用用户理由原文）...这将决定资本运用方式...",
+      "based_on": ["E.direction", "E.directionReason", "S.capital_文化资本", "W.coreCode"],
+      "confidence": "high"
+    },
+    {
+      "id": "strength_risk",
+      "title": "优势与风险",
+      "content": "最大优势：...最大风险：...家风副作用（如xxx）也是风险来源之一...",
+      "based_on": ["S.capital_社会资本", "W.flipsideTags", "E.direction"],
+      "confidence": "medium"
+    },
+    {
+      "id": "strategic_summary",
+      "title": "战略整合",
+      "content": "一句话战略定位总结...",
+      "based_on": ["S.capital_文化资本", "W.coreCode", "N.coreAbility", "E.coreValues"],
+      "confidence": "high"
+    }
   ],
   "drafts": [
     {
@@ -396,11 +700,11 @@ ${factsJson}
         { "label": "版本C：偏xxx", "content": "..." }
       ]
     },
-    ...共 3 个
+    ...共 3 个 draft
   ]
 }
 
-只输出 JSON，不要任何其他文字。`;
+不要在 JSON 之外添加任何说明文字、markdown 标记或换行。直接以 { 开头，以 } 结尾。只输出 JSON，不要任何其他文字。`;
 
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",

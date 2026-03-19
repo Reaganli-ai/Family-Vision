@@ -30,6 +30,16 @@ export interface CompassViewData {
   e_value_3: string;
   e_deferred: string;
   e_strategic_direction: string;
+  // W new fields
+  w_tradeoff_summary: string;
+  w_flipside_tags: string;
+  w_upgrade_keep: string;
+  w_upgrade_reduce: string;
+  // E new fields
+  e_direction_reason: string;
+  e_self_core: string;
+  e_partner_core: string;
+  e_partner_skipped: boolean;
   vision_statement: string;
   sign_father: string;
   sign_mother: string;
@@ -68,6 +78,16 @@ function toViewData(cd: CompassDataSchema): CompassViewData {
     e_value_3: coreValues[2] || NOT_MENTIONED,
     e_deferred: deferredValues.join("、") || NOT_MENTIONED,
     e_strategic_direction: (cd.E?.direction?.value as string) || NOT_MENTIONED,
+    w_tradeoff_summary: (cd.W?.tradeoffChoices?.value as { labelA: string; labelB: string; choice: "A" | "B" }[])
+      ?.map(t => `在「${t.labelA} vs ${t.labelB}」上更偏向${t.choice === "A" ? t.labelA : t.labelB}`)
+      .join("；") || "",
+    w_flipside_tags: (cd.W?.flipsideTags?.value as string[])?.join("、") || "",
+    w_upgrade_keep: (cd.W?.upgradeKeep?.value as string) || "",
+    w_upgrade_reduce: (cd.W?.upgradeReduce?.value as string) || "",
+    e_direction_reason: (cd.E?.directionReason?.value as string) || "",
+    e_self_core: (cd.E?.selfCore?.value as string[])?.join("、") || "",
+    e_partner_core: (cd.E?.partnerCore?.value as string[])?.join("、") || "",
+    e_partner_skipped: cd.E?.partnerSkipped?.value !== false,
     vision_statement: "",
     sign_father: "",
     sign_mother: "",
@@ -162,6 +182,10 @@ const CompassReport = () => {
           const typed = cd as CompassDataSchema;
           setCompassData(typed);
           setData(toViewData(typed));
+          // Restore saved report
+          if ((typed as Record<string, unknown>).report) {
+            setReport((typed as Record<string, unknown>).report as ReportResponse);
+          }
           // Restore saved draft edits
           if ((typed as Record<string, unknown>).draftEdits) {
             setDraftEdits((typed as Record<string, unknown>).draftEdits as Record<string, string>);
@@ -209,6 +233,18 @@ const CompassReport = () => {
       }
       const data: ReportResponse = await res.json();
       setReport(data);
+
+      // Persist report to DB
+      if (conversationId) {
+        try {
+          const cd = await loadCompassData(conversationId);
+          if (cd) {
+            await saveCompassData(conversationId, { ...cd, report: data });
+          }
+        } catch (saveErr) {
+          console.error("Failed to save report to DB:", saveErr);
+        }
+      }
 
       // If vision draft exists, pre-fill the vision statement with first option
       if (!draftEdits.vision_statement) {
@@ -356,7 +392,17 @@ const CompassReport = () => {
           <SnapshotBox title="我们的根基快照" subtitle="第三部分：我们的根基 — 连接家族的精神血脉">
             <p className="snapshot-text">家族故事：{F("w_story", "_____________________")}</p>
             <p className="snapshot-text mt-2">核心精神：{F("w_core_spirit", "_____________________")}</p>
-            <p className="snapshot-text mt-2">升级方向：从「{F("w_spirit_from", "__________")}」→ 到「{HL("w_spirit_to", "__________")}」</p>
+            {data.w_tradeoff_summary && (
+              <p className="snapshot-text mt-2">取舍倾向：{data.w_tradeoff_summary}</p>
+            )}
+            <p className="snapshot-text mt-2">
+              升级路径：保留「{data.w_upgrade_keep || F("w_spirit_from", "__________")}」内核，
+              {data.w_upgrade_reduce ? `减少「${data.w_upgrade_reduce}」，` : ""}
+              从「{F("w_spirit_from", "__________")}」升级为「{HL("w_spirit_to", "__________")}」
+            </p>
+            {data.w_flipside_tags && (
+              <p className="snapshot-text mt-2">家风副作用觉察：{data.w_flipside_tags}</p>
+            )}
           </SnapshotBox>
 
           <SnapshotBox title="我们的共识快照" subtitle="第四部分：我们的共识 — 家庭教育的战略价值观对齐">
@@ -364,12 +410,27 @@ const CompassReport = () => {
               直觉锚点：最希望孩子拥有「{F("e_gift_to_child", "______________")}」，
               最怕孩子缺少「{F("e_fear_child_lacks", "______________")}」。
             </p>
-            <p className="snapshot-text mt-2">
-              核心价值观：「{HL("e_value_1", "______________")}」、
-              「{HL("e_value_2", "______________")}」、「{HL("e_value_3", "______________")}」
-            </p>
+            {!data.e_partner_skipped && data.e_self_core && (
+              <>
+                <p className="snapshot-text mt-2">我更看重：{data.e_self_core}</p>
+                <p className="snapshot-text mt-1">伴侣更看重：{data.e_partner_core || NOT_MENTIONED}</p>
+                <p className="snapshot-text mt-1">
+                  最终共识聚焦：「{HL("e_value_1", "______________")}」、
+                  「{HL("e_value_2", "______________")}」、「{HL("e_value_3", "______________")}」
+                </p>
+              </>
+            )}
+            {(data.e_partner_skipped || !data.e_self_core) && (
+              <p className="snapshot-text mt-2">
+                核心价值观：「{HL("e_value_1", "______________")}」、
+                「{HL("e_value_2", "______________")}」、「{HL("e_value_3", "______________")}」
+              </p>
+            )}
             <p className="snapshot-text mt-1">战略暂缓：{F("e_deferred", "______________")}</p>
-            <p className="snapshot-text mt-3">战略方向：{HL("e_strategic_direction", "内核 / 创造 / 连接")}</p>
+            <p className="snapshot-text mt-3">
+              战略方向：{HL("e_strategic_direction", "内核 / 创造 / 连接")}
+              {data.e_direction_reason ? `（${data.e_direction_reason}）` : ""}
+            </p>
           </SnapshotBox>
 
           <PageFooter text="此页为《我们与自己的关系》核心产出" />

@@ -1,24 +1,30 @@
 import { useState } from "react";
 
-const HERO_TRAITS = [
+const FALLBACK_TRAITS = [
   { label: "白手起家", description: "从无到有，靠自己闯出来" },
   { label: "守信重诺", description: "答应了就做到，从不食言" },
-  { label: "知识渊博", description: "有见识有学问，全家的智囊" },
-  { label: "庇护全族", description: "遇到事扛在前面，保护家人" },
   { label: "坚韧不拔", description: "再苦再难也不放弃" },
-  { label: "会做人/关系通达", description: "左右逢源，人脉极广" },
+  { label: "庇护全族", description: "遇到事扛在前面，保护家人" },
 ];
 
+interface Trait {
+  label: string;
+  description: string;
+}
+
 interface Props {
+  traits?: Trait[];
   onConfirm: (traits: string[]) => void;
   disabled?: boolean;
 }
 
-const HeroSelectCard = ({ onConfirm, disabled = false }: Props) => {
+const HeroSelectCard = ({ traits, onConfirm, disabled = false }: Props) => {
+  const displayTraits = traits?.length ? traits : FALLBACK_TRAITS;
   const [selected, setSelected] = useState<string[]>([]);
   const [customTag, setCustomTag] = useState("");
   const [showCustom, setShowCustom] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
+  const [customHint, setCustomHint] = useState("");
 
   const toggleTrait = (label: string) => {
     setSelected((prev) => {
@@ -31,16 +37,48 @@ const HeroSelectCard = ({ onConfirm, disabled = false }: Props) => {
   const addCustom = () => {
     const trimmed = customTag.trim();
     if (!trimmed) return;
-    if (selected.length >= 2) return;
+    if (selected.includes(trimmed)) {
+      setCustomHint("这个特质已经选过了");
+      return;
+    }
+    if (selected.length >= 2) {
+      setCustomHint("最多选 2 个");
+      return;
+    }
     setSelected((prev) => [...prev, trimmed]);
+    setCustomHint("");
     setCustomTag("");
     setShowCustom(false);
   };
 
   const handleConfirm = () => {
+    const trimmedCustomTag = customTag.trim();
+    const hasPendingCustomTag =
+      showCustom &&
+      trimmedCustomTag.length > 0 &&
+      !selected.includes(trimmedCustomTag) &&
+      selected.length < 2;
+    const finalSelected = hasPendingCustomTag
+      ? [...selected, trimmedCustomTag]
+      : selected;
+
+    if (hasPendingCustomTag) {
+      setSelected(finalSelected);
+      setCustomTag("");
+      setShowCustom(false);
+      setCustomHint("");
+    }
     setConfirmed(true);
-    onConfirm(selected);
+    onConfirm(finalSelected);
   };
+
+  const trimmedPendingCustomTag = customTag.trim();
+  const canAutoIncludePendingCustomTag =
+    showCustom &&
+    trimmedPendingCustomTag.length > 0 &&
+    !selected.includes(trimmedPendingCustomTag) &&
+    selected.length < 2;
+  const canConfirm = selected.length > 0 || canAutoIncludePendingCustomTag;
 
   if (confirmed || disabled) {
     return (
@@ -62,12 +100,12 @@ const HeroSelectCard = ({ onConfirm, disabled = false }: Props) => {
           你们家族里最受尊敬的那个人，他/她因为什么赢得地位？
         </p>
         <p className="text-[11px] text-primary font-medium mt-1.5">
-          最多选 2 个
+          最多选 2 个{traits?.length ? "" : "（通用参考，也可以自定义）"}
         </p>
       </div>
 
       <div className="space-y-2">
-        {HERO_TRAITS.map((trait) => (
+        {displayTraits.map((trait) => (
           <button
             key={trait.label}
             onClick={() => toggleTrait(trait.label)}
@@ -99,43 +137,51 @@ const HeroSelectCard = ({ onConfirm, disabled = false }: Props) => {
         </button>
       )}
       {showCustom && (
-        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-          <input
-            type="text"
-            autoFocus
-            value={customTag}
-            onChange={(e) => setCustomTag(e.target.value)}
-            onKeyDown={(e) => {
-              e.stopPropagation();
-              if (e.key === "Enter") {
-                e.preventDefault();
-                addCustom();
-              }
-            }}
-            maxLength={30}
-            placeholder="输入自定义特质..."
-            className="flex-1 bg-secondary/40 rounded-lg px-3 py-1.5 text-[12px] outline-none placeholder:text-muted-foreground/40 focus:ring-1 focus:ring-primary/30 border border-border"
-          />
-          <button
-            onClick={(e) => { e.stopPropagation(); addCustom(); }}
-            disabled={!customTag.trim() || selected.length >= 2}
-            className="text-[12px] text-primary font-medium disabled:opacity-40 px-2 py-1 rounded hover:bg-primary/10 transition-colors"
-          >
-            添加
-          </button>
-          <button
-            onClick={(e) => { e.stopPropagation(); setShowCustom(false); setCustomTag(""); }}
-            className="text-[12px] text-muted-foreground px-2 py-1 rounded hover:bg-secondary transition-colors"
-          >
-            取消
-          </button>
+        <div className="space-y-1.5" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              autoFocus
+              value={customTag}
+              onChange={(e) => {
+                setCustomTag(e.target.value);
+                if (customHint) setCustomHint("");
+              }}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  addCustom();
+                }
+              }}
+              maxLength={30}
+              placeholder="输入自定义特质..."
+              className="flex-1 bg-secondary/40 rounded-lg px-3 py-1.5 text-[12px] outline-none placeholder:text-muted-foreground/40 focus:ring-1 focus:ring-primary/30 border border-border"
+            />
+            <button
+              onClick={(e) => { e.stopPropagation(); addCustom(); }}
+              disabled={!customTag.trim() || selected.length >= 2}
+              className="text-[12px] text-primary font-medium disabled:opacity-40 px-2 py-1 rounded hover:bg-primary/10 transition-colors"
+            >
+              添加
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowCustom(false); setCustomTag(""); setCustomHint(""); }}
+              className="text-[12px] text-muted-foreground px-2 py-1 rounded hover:bg-secondary transition-colors"
+            >
+              取消
+            </button>
+          </div>
+          {customHint && (
+            <p className="text-[11px] text-muted-foreground">{customHint}</p>
+          )}
         </div>
       )}
 
       <div className="flex justify-end pt-1">
         <button
           onClick={handleConfirm}
-          disabled={selected.length === 0}
+          disabled={!canConfirm}
           className="px-5 py-2 rounded-lg text-[13px] font-medium transition-all bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           确认 →

@@ -89,6 +89,51 @@ export const TAG_AXIS_MAP: Record<string, string[]> = {
   "情绪心理": ["safety-vs-growth", "face-vs-authenticity"],
 };
 
+// ─── Axis Keyword Map (for smart fallback) ──────────
+
+export const AXIS_KEYWORD_MAP: Record<string, string[]> = {
+  "integrity-vs-result": [
+    "诚信", "信用", "守信", "诚实", "欺骗", "说谎", "承诺", "食言",
+    "原则", "底线", "正直", "靠谱", "口碑", "信誉",
+  ],
+  "safety-vs-growth": [
+    "稳定", "安全", "冒险", "风险", "尝试", "保守", "闯", "创业",
+    "辞职", "跳槽", "大胆", "稳当", "冲动", "谨慎",
+  ],
+  "rules-vs-relations": [
+    "规矩", "规则", "纪律", "人情", "关系", "通融", "制度", "破例",
+    "变通", "秩序", "法", "情面", "照顾", "偏袒",
+  ],
+  "achievement-vs-balance": [
+    "成绩", "第一", "竞争", "拼", "卷", "压力", "放松", "平衡",
+    "快乐", "健康", "内卷", "名次", "努力", "赢",
+  ],
+  "obedience-vs-expression": [
+    "听话", "服从", "长辈", "权威", "顶嘴", "反抗", "自主", "主见",
+    "独立", "叛逆", "管教", "尊重", "乖", "懂事",
+  ],
+  "face-vs-authenticity": [
+    "面子", "丢人", "体面", "攀比", "真实", "内心", "装", "虚荣",
+    "别人怎么看", "丢脸", "外人", "做自己", "笑话", "好看",
+  ],
+};
+
+/**
+ * Infer axis IDs from AI response text by keyword matching.
+ * Returns 2-3 axis IDs sorted by hit count, or [] if < 2 axes matched.
+ */
+export function inferAxesFromText(text: string): string[] {
+  const scores: { id: string; count: number }[] = [];
+  for (const [id, keywords] of Object.entries(AXIS_KEYWORD_MAP)) {
+    const count = keywords.filter((kw) => text.includes(kw)).length;
+    scores.push({ id, count });
+  }
+  scores.sort((a, b) => b.count - a.count);
+  const hits = scores.filter((s) => s.count > 0);
+  if (hits.length < 2) return [];
+  return hits.slice(0, 3).map((s) => s.id);
+}
+
 // ─── Hero Trait Options ──────────────────────────────
 
 export const HERO_TRAITS = [
