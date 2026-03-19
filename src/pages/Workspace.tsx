@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import ChatArea from "@/components/workspace/ChatArea";
 import RightRail from "@/components/workspace/RightRail";
+import FeedbackWidget from "@/components/workspace/FeedbackWidget";
 import TopBanner from "@/components/workspace/TopBanner";
 import {
   ResizablePanelGroup,
@@ -555,6 +556,8 @@ const Workspace = () => {
   const currentStep = STEP_MAP[currentModule] || "step1";
   const flow = FLOW[currentModule];
   const node = flow?.nodes[currentNode];
+  const currentNodeType = node?.type || "unknown";
+  const currentCardType = node?.type === "card" ? (node as CardNode).cardType : undefined;
 
   // Determine phase from node index
   const getPhase = (): PhaseId => {
@@ -1829,6 +1832,18 @@ const Workspace = () => {
           loading={loadingHistory}
         />
       )}
+
+      <FeedbackWidget
+        conversationId={conversationId}
+        familyCode={familyCode}
+        currentStepId={currentStep}
+        currentStepLabel={currentStepInfo.label}
+        currentPhase={currentPhase}
+        currentNodeIndex={currentNode}
+        currentNodeType={currentNodeType}
+        currentCardType={currentCardType}
+        messages={messages}
+      />
     </div>
   );
 };

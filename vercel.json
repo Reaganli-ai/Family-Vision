@@ -13,6 +13,7 @@
   "rewrites": [
     { "source": "/api/chat", "destination": "/api/chat" },
     { "source": "/api/report", "destination": "/api/report" },
+    { "source": "/api/feedback", "destination": "/api/feedback" },
     { "source": "/(.*)", "destination": "/" }
   ]
 }
