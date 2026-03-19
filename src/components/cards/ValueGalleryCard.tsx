@@ -374,7 +374,11 @@ const ValueGalleryCard = ({ onConfirm, disabled = false }: Props) => {
           </button>
           <button
             onClick={() => handleConfirm(false)}
-            disabled={finalCore.size < CORE_COUNT || finalDeferred.size < DEFER_COUNT}
+            disabled={finalCore.size < CORE_COUNT || (() => {
+              const available = deferredPool.filter((v) => !finalCore.has(v)).length;
+              const required = Math.min(DEFER_COUNT, available);
+              return finalDeferred.size < required;
+            })()}
             className="px-5 py-2 rounded-lg text-[13px] font-medium bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
           >
             确认价值观 →
