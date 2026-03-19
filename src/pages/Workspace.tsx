@@ -29,7 +29,7 @@ import {
   field,
 } from "@/lib/compass-schema";
 import { getDomainHint, generateDiagnostic } from "@/lib/n-diagnostic";
-import { renderAxisLabels, buildFinalStatement, buildWSnapshot } from "@/lib/w-templates";
+import { renderAxisLabels, buildFinalStatement, buildWSnapshot, inferAxesFromText } from "@/lib/w-templates";
 
 export type StepId = "step1" | "step2" | "step3" | "step4";
 export type PhaseId = "collect" | "deepen" | "confirm";
@@ -517,7 +517,7 @@ const Workspace = () => {
       }
 
       // After AI message, advance to next node using the CURRENT refs (not stale closure)
-      advanceNode(snapshotContent, structuredData);
+      advanceNode(snapshotContent, structuredData, cleanContent);
     } catch (error) {
       setMessages((prev) => [
         ...prev,
@@ -528,7 +528,7 @@ const Workspace = () => {
     }
   }, [getFlowContext]);
 
-  const advanceNode = (snapshotContent?: string, structuredData?: unknown) => {
+  const advanceNode = (snapshotContent?: string, structuredData?: unknown, aiText?: string) => {
     const mod = currentModuleRef.current;
     const curNode = currentNodeRef.current;
     const nextNode = curNode + 1;
@@ -574,7 +574,19 @@ const Workspace = () => {
             heroTraitsRef.current = sd.hero_traits;
           }
         }
-        // Fallback: if AI didn't output DATA or axes mapped to empty, use 3 default axes
+        // Smart fallback: infer axes from AI response text keywords
+        if (!tradeoffAxes?.length && aiText) {
+          const inferredIds = inferAxesFromText(aiText);
+          if (inferredIds.length >= 2) {
+            tradeoffAxes = inferredIds
+              .map((id) => {
+                const rendered = renderAxisLabels(id);
+                return rendered ? { axisId: id, labelA: rendered.labelA, labelB: rendered.labelB } : null;
+              })
+              .filter(Boolean) as { axisId: string; labelA: string; labelB: string }[];
+          }
+        }
+        // Fixed fallback: if smart inference also failed, use 3 default axes
         if (!tradeoffAxes?.length) {
           const fallbackAxisIds = ["safety-vs-growth", "rules-vs-relations", "achievement-vs-balance"];
           tradeoffAxes = fallbackAxisIds
