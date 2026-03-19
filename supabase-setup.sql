@@ -182,3 +182,41 @@ $$ language plpgsql;
 create trigger auto_archive_on_insert
   after insert on conversations
   for each row execute function auto_archive_old_conversations();
+
+-- ============================================
+-- 反馈表：内测反馈收集（网页右下角反馈按钮）
+-- ============================================
+
+create table if not exists feedbacks (
+  id text primary key,
+  user_id uuid references auth.users(id) on delete set null,
+  conversation_id uuid references conversations(id) on delete set null,
+  area text not null default '未分类',
+  issue_type text not null default '其他',
+  description text not null,
+  reproducibility text,
+  contact text,
+  context jsonb not null default '{}',
+  recent_messages jsonb not null default '[]',
+  source text not null default 'in_app_widget',
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_feedbacks_created_at on feedbacks(created_at desc);
+create index if not exists idx_feedbacks_issue_type on feedbacks(issue_type);
+create index if not exists idx_feedbacks_area on feedbacks(area);
+create index if not exists idx_feedbacks_conversation_id on feedbacks(conversation_id);
+
+alter table feedbacks enable row level security;
+
+drop policy if exists "Users can view own feedbacks" on feedbacks;
+create policy "Users can view own feedbacks"
+  on feedbacks
+  for select
+  using (auth.uid() = user_id);
+
+drop policy if exists "Users can create own feedbacks" on feedbacks;
+create policy "Users can create own feedbacks"
+  on feedbacks
+  for insert
+  with check (auth.uid() = user_id);
