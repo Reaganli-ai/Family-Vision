@@ -111,7 +111,8 @@ const ChatArea = ({
           <SingleSelectCard
             question={(msg.cardProps?.question as string) || ""}
             options={(msg.cardProps?.options as string[]) || []}
-            onConfirm={(selected) => handleConfirm(selected)}
+            reasonPlaceholder={msg.cardProps?.reasonPlaceholder as string | undefined}
+            onConfirm={(data) => handleConfirm(data)}
             disabled={confirmed}
           />
         );
@@ -249,6 +250,7 @@ const ChatArea = ({
       case "hero-select":
         return (
           <HeroSelectCard
+            traits={(msg.cardProps?.traits as { label: string; description: string }[]) || undefined}
             onConfirm={(traits) => handleConfirm(traits)}
             disabled={confirmed}
           />

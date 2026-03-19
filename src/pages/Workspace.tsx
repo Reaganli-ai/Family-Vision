@@ -101,6 +101,11 @@ const Workspace = () => {
   const bumpCompass = () => setCompassVersion((v) => v + 1);
 
 
+  // W-01 multi-round dialogue: track user reply count for frontend safeguard
+  const w01RoundRef = useRef(0);
+  // W-03 AI outputs hero_traits alongside axes; cache for HeroSelectCard (node 4, after TradeoffCard)
+  const heroTraitsRef = useRef<{ label: string; description: string }[] | null>(null);
+
   // Refs to avoid stale closures in async callbacks
   const currentModuleRef = useRef(currentModule);
   const currentNodeRef = useRef(currentNode);
@@ -461,7 +466,8 @@ const Workspace = () => {
                 .replace(/<!--SNAPSHOT:.*?-->/s, "")
                 .replace(/<!--SNAPSHOT:.*/s, "")
                 .replace(/<!--DATA:.*?-->/s, "")
-                .replace(/<!--DATA:.*/s, "");
+                .replace(/<!--DATA:.*/s, "")
+                .replace(/<!--READY-->/g, "");
               setStreamingContent(visibleText);
             }
           } catch { /* skip */ }
@@ -489,6 +495,7 @@ const Workspace = () => {
         .replace(/<!--SNAPSHOT:.*/s, "")
         .replace(/<!--DATA:.*?-->/s, "")
         .replace(/<!--DATA:.*/s, "")
+        .replace(/<!--READY-->/g, "")
         .trim();
 
       const aiMsg: Message = {
@@ -500,6 +507,14 @@ const Workspace = () => {
       setMessages((prev) => [...prev, aiMsg]);
       setStreamingContent("");
       setIsAiTyping(false);
+
+      // W-01 multi-round gate: if AI didn't signal READY, stay on W-01
+      const isW01 = FLOW[mod]?.id === "W" && node === 0;
+      const hasReady = fullContent.includes("<!--READY-->");
+      if (isW01 && !hasReady) {
+        // Stay on W-01, don't advance — wait for user reply
+        return;
+      }
 
       // After AI message, advance to next node using the CURRENT refs (not stale closure)
       advanceNode(snapshotContent, structuredData);
@@ -544,7 +559,7 @@ const Workspace = () => {
       // For tradeoff-choice card: render axes from AI DATA + template library
       let tradeoffAxes: { axisId: string; labelA: string; labelB: string }[] | undefined;
       if (next.cardType === "tradeoff-choice" && structuredData) {
-        const sd = structuredData as { axes?: { axis_id: string; keyword?: string }[] };
+        const sd = structuredData as { axes?: { axis_id: string; keyword?: string }[]; hero_traits?: { label: string; description: string }[] };
         if (sd.axes) {
           tradeoffAxes = sd.axes
             .map((a) => {
@@ -552,6 +567,10 @@ const Workspace = () => {
               return rendered ? { axisId: a.axis_id, labelA: rendered.labelA, labelB: rendered.labelB } : null;
             })
             .filter(Boolean) as { axisId: string; labelA: string; labelB: string }[];
+        }
+        // Cache hero_traits for HeroSelectCard (rendered after TradeoffCard)
+        if (sd.hero_traits?.length) {
+          heroTraitsRef.current = sd.hero_traits;
         }
       }
 
@@ -566,7 +585,6 @@ const Workspace = () => {
         if (!candidates?.length) {
           const cd = compassDataRef.current;
           const storyText = (cd.W?.story?.value as string) || "";
-          const tag = (cd.W?.storyPriorityTag?.value as string) || "";
           const heroes = cd.W?.heroTraits?.value as string[] | undefined;
           const quoteChild = (cd.W?.quoteChildhood?.value as string) || "";
           const quoteNow = (cd.W?.quoteNow?.value as string) || "";
@@ -575,16 +593,7 @@ const Workspace = () => {
 
           const fallbackCandidates: { name: string; definition: string; evidence: Record<string, string> }[] = [];
 
-          // Candidate 1: from story priority tag (e.g. "规则原则" → "守规")
-          if (tag) {
-            fallbackCandidates.push({
-              name: tag.length <= 4 ? tag : tag.slice(0, 2),
-              definition: `家庭在关键时刻坚守「${tag}」的信念`,
-              evidence: { 故事: storyShort || "—", 口头禅: quoteChild || quoteNow || "—" },
-            });
-          }
-
-          // Candidate 2: from hero traits (e.g. "守信重诺")
+          // Candidate 1: from hero traits (e.g. "守信重诺")
           if (Array.isArray(heroes) && heroes[0]) {
             fallbackCandidates.push({
               name: heroes[0].length <= 4 ? heroes[0] : heroes[0].slice(0, 4),
@@ -613,12 +622,16 @@ const Workspace = () => {
       }
 
       // For quote-fill card: inject dynamic hints from prior W data
+      // For hero-select card: inject AI-generated traits from W-03 DATA (cached in ref)
+      let heroTraitsList: { label: string; description: string }[] | undefined;
+      if (next.cardType === "hero-select" && heroTraitsRef.current?.length) {
+        heroTraitsList = heroTraitsRef.current;
+      }
+
       let quoteHints: string[] | undefined;
       if (next.cardType === "quote-fill") {
         const cd = compassDataRef.current;
         const hints: string[] = [];
-        // From story priority tag
-        if (cd.W?.storyPriorityTag?.value) hints.push(cd.W.storyPriorityTag.value);
         // From hero traits
         const heroTraits = cd.W?.heroTraits?.value;
         if (Array.isArray(heroTraits)) hints.push(...heroTraits.slice(0, 3));
@@ -726,6 +739,7 @@ const Workspace = () => {
             : {}),
           ...(abilityHint ? { aiHint: abilityHint } : {}),
           ...(tradeoffAxes ? { axes: tradeoffAxes } : {}),
+          ...(heroTraitsList ? { traits: heroTraitsList } : {}),
           ...(candidates ? { candidates } : {}),
           ...(coreCodeName ? { coreCodeName } : {}),
           ...(flipsideCost ? { flipsideCost } : {}),
@@ -836,8 +850,14 @@ const Workspace = () => {
       } else {
         summary = `不太对：${result.reason || ""}${result.detail ? `（${result.detail}）` : ""}`;
       }
-    } else if (cardType === "single-select" || cardType === "priority-select") {
+    } else if (cardType === "priority-select") {
       summary = `我选择优先升级：${data}`;
+    } else if (cardType === "single-select") {
+      const d = data as { selected: string; reason?: string };
+      const dirMatch = d.selected.match(/^(内核|创造|连接)/);
+      const dir = dirMatch?.[1] || d.selected;
+      summary = `教育战略方向：${dir}`;
+      if (d.reason) summary += `\n理由：${d.reason}`;
     } else if (cardType === "agree-disagree") {
       const d = data as { agreed: boolean; reason?: string };
       if (d.agreed) {
@@ -853,8 +873,8 @@ const Workspace = () => {
     } else if (cardType === "ability-select") {
       summary = `能力押注：${data as string}`;
     } else if (cardType === "story-input") {
-      const d = data as { story: string; priorityTag?: string };
-      summary = d.story + (d.priorityTag ? `（最在意：${d.priorityTag}）` : "");
+      const d = data as { story: string };
+      summary = d.story;
     } else if (cardType === "tradeoff-choice") {
       const choices = data as { axisId: string; labelA: string; labelB: string; choice: "A" | "B" }[];
       summary = choices.map((c) => c.choice === "A" ? c.labelA : c.labelB).join("；");
@@ -930,8 +950,19 @@ const Workspace = () => {
       ]);
       return;
     } else if (cardType === "value-gallery") {
-      const d = data as { core: string[]; deferred: string[] };
-      summary = `核心价值观：${d.core.join("、")}；战略暂缓：${d.deferred.join("、")}`;
+      const d = data as {
+        selfCore: string[]; selfDeferred: string[];
+        partnerCore?: string[]; partnerDeferred?: string[];
+        core: string[]; deferred: string[];
+        partnerSkipped: boolean;
+      };
+      if (d.partnerSkipped) {
+        summary = `我选的核心价值观：${d.core.join("、")}\n战略暂缓：${d.deferred.join("、")}`;
+      } else {
+        summary = `我选的核心价值观：${d.selfCore.join("、")}，暂缓：${d.selfDeferred.join("、")}\n`
+          + `伴侣选的核心价值观：${d.partnerCore?.join("、")}，暂缓：${d.partnerDeferred?.join("、")}\n`
+          + `经过协商，最终共识 → 核心聚焦：${d.core.join("、")}；战略暂缓：${d.deferred.join("、")}`;
+      }
     }
 
     // Add as user message and request next AI response
@@ -1082,12 +1113,19 @@ const Workspace = () => {
       setTimeout(() => requestAIMessage(summary), 300);
     } else if (nextFlowNode?.type === "card") {
       // Next is another card — render it immediately
+      const nextCardType = (nextFlowNode as CardNode).cardType;
       const cardMsg: Message = {
         role: "ai",
         content: "",
         timestamp: new Date(),
-        cardType: (nextFlowNode as CardNode).cardType,
-        cardProps: { ...(nextFlowNode as CardNode).cardProps },
+        cardType: nextCardType,
+        cardProps: {
+          ...(nextFlowNode as CardNode).cardProps,
+          // Inject cached hero traits for HeroSelectCard
+          ...(nextCardType === "hero-select" && heroTraitsRef.current?.length
+            ? { traits: heroTraitsRef.current }
+            : {}),
+        },
       };
       setMessages((prev) => [...prev, cardMsg]);
     }
@@ -1198,6 +1236,35 @@ const Workspace = () => {
         ).catch((err) => console.error("Failed to save S.capitalRationale:", err));
       }
     }
+    // W-01 multi-round gate: stay on node 0, send user reply to AI without advancing
+    if (moduleId === "W" && nodeIdx === 0) {
+      w01RoundRef.current += 1;
+      // Frontend safeguard: if 4+ user replies and AI still hasn't sent READY,
+      // force advance to StoryInputCard
+      if (w01RoundRef.current >= 4) {
+        const forceNode = 1; // W-02: story-input card
+        currentNodeRef.current = forceNode;
+        setCurrentNode(forceNode);
+        const cardNode = FLOW[mod]?.nodes[forceNode];
+        if (cardNode?.type === "card") {
+          setMessages((prev) => [...prev, {
+            role: "ai",
+            content: "好的，聊了不少了。现在请在下面的卡片里，把你印象最深的那个瞬间用 1-3 句话写下来。",
+            timestamp: new Date(),
+          }, {
+            role: "ai",
+            content: "",
+            timestamp: new Date(),
+            cardType: (cardNode as CardNode).cardType,
+            cardProps: { ...(cardNode as CardNode).cardProps },
+          }]);
+        }
+        return;
+      }
+      await requestAIMessage(content);
+      return;
+    }
+
     // Advance past the user node
     const curNode = currentNodeRef.current;
     const nextNode = curNode + 1;

@@ -1,20 +1,25 @@
 import { useState } from "react";
 
-const HERO_TRAITS = [
+const FALLBACK_TRAITS = [
   { label: "白手起家", description: "从无到有，靠自己闯出来" },
   { label: "守信重诺", description: "答应了就做到，从不食言" },
-  { label: "知识渊博", description: "有见识有学问，全家的智囊" },
-  { label: "庇护全族", description: "遇到事扛在前面，保护家人" },
   { label: "坚韧不拔", description: "再苦再难也不放弃" },
-  { label: "会做人/关系通达", description: "左右逢源，人脉极广" },
+  { label: "庇护全族", description: "遇到事扛在前面，保护家人" },
 ];
 
+interface Trait {
+  label: string;
+  description: string;
+}
+
 interface Props {
+  traits?: Trait[];
   onConfirm: (traits: string[]) => void;
   disabled?: boolean;
 }
 
-const HeroSelectCard = ({ onConfirm, disabled = false }: Props) => {
+const HeroSelectCard = ({ traits, onConfirm, disabled = false }: Props) => {
+  const displayTraits = traits?.length ? traits : FALLBACK_TRAITS;
   const [selected, setSelected] = useState<string[]>([]);
   const [customTag, setCustomTag] = useState("");
   const [showCustom, setShowCustom] = useState(false);
@@ -62,12 +67,12 @@ const HeroSelectCard = ({ onConfirm, disabled = false }: Props) => {
           你们家族里最受尊敬的那个人，他/她因为什么赢得地位？
         </p>
         <p className="text-[11px] text-primary font-medium mt-1.5">
-          最多选 2 个
+          最多选 2 个{traits?.length ? "" : "（通用参考，也可以自定义）"}
         </p>
       </div>
 
       <div className="space-y-2">
-        {HERO_TRAITS.map((trait) => (
+        {displayTraits.map((trait) => (
           <button
             key={trait.label}
             onClick={() => toggleTrait(trait.label)}

@@ -62,7 +62,7 @@ const CoreCodeConfirmCard = ({ candidates, onConfirm, disabled = false }: Props)
   return (
     <div className="bg-card border-2 border-primary/20 rounded-xl p-5 space-y-3">
       <p className="text-[14px] font-medium text-foreground">
-        基于你的故事、取舍、英雄和口头禅，我提炼了几个「家风内核」候选。选一个最像你们家的：
+        基于你的故事和素材，我提炼了几个参考方向。你完全可以用自己的词：
       </p>
 
       <div className="space-y-2">
@@ -103,7 +103,7 @@ const CoreCodeConfirmCard = ({ candidates, onConfirm, disabled = false }: Props)
           }`}
         >
           <p className="text-[13px] font-medium text-primary">+ 自定义</p>
-          <p className="text-[11px] text-muted-foreground mt-0.5">用自己的话写一个家风内核</p>
+          <p className="text-[11px] text-muted-foreground mt-0.5">这些都不像？用自己的话写</p>
         </button>
       </div>
 
@@ -116,7 +116,7 @@ const CoreCodeConfirmCard = ({ candidates, onConfirm, disabled = false }: Props)
               type="text"
               value={editedName}
               onChange={(e) => setEditedName(e.target.value)}
-              placeholder="家风名称"
+              placeholder="给你们家的精神内核取个名字"
               className="w-full bg-secondary/40 rounded-lg px-3 py-2 text-[13px] outline-none placeholder:text-muted-foreground/40 focus:ring-1 focus:ring-primary/30"
             />
           </div>
@@ -126,7 +126,7 @@ const CoreCodeConfirmCard = ({ candidates, onConfirm, disabled = false }: Props)
               type="text"
               value={editedDef}
               onChange={(e) => setEditedDef(e.target.value)}
-              placeholder="一句话定义"
+              placeholder="用一句话说明它是什么"
               className="w-full bg-secondary/40 rounded-lg px-3 py-2 text-[13px] outline-none placeholder:text-muted-foreground/40 focus:ring-1 focus:ring-primary/30"
             />
           </div>
