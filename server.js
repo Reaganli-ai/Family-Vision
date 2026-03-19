@@ -87,6 +87,7 @@ const SYSTEM_PROMPT = `你是"彼灯教育·家庭愿景工坊"的 AI 导师。
   axes 规则：可用的 axis_id：integrity-vs-result, safety-vs-growth, rules-vs-relations, achievement-vs-balance, obedience-vs-expression, face-vs-authenticity。关键词必须来自用户原话，不要编造。最少选 2 组，最多 3 组。
   hero_traits 规则：基于故事中体现的行为模式，推断家族最受尊敬的人可能具备的 4-6 个特质。每个特质用 2-4 字命名 + 10 字内说明。必须贴合用户故事，不要用通用模板。
   回复正文简短接住故事（2-3句），然后说"我帮你把故事翻译成几个取舍点，请在下方卡片中确认"。
+  **⚠️ <!--DATA:...-->必须作为回复的最后一行输出，这是前端渲染卡片的唯一数据来源，缺失则卡片无法正常显示。**
 - W-07: 综合用户在 Q1（故事）、Q2（取舍）、Q3（英雄）、Q4（口头禅）的所有数据，提炼 3-5 个"家风内核"候选命名。
   每个候选必须包含 name（2-4字中性策略命名）、definition（一句话定义）、evidence（引用 Q1-Q4 的具体数据作为依据）。
   **你必须在回复末尾输出结构化数据，格式：**

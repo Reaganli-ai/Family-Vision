@@ -558,19 +558,31 @@ const Workspace = () => {
 
       // For tradeoff-choice card: render axes from AI DATA + template library
       let tradeoffAxes: { axisId: string; labelA: string; labelB: string }[] | undefined;
-      if (next.cardType === "tradeoff-choice" && structuredData) {
-        const sd = structuredData as { axes?: { axis_id: string; keyword?: string }[]; hero_traits?: { label: string; description: string }[] };
-        if (sd.axes) {
-          tradeoffAxes = sd.axes
-            .map((a) => {
-              const rendered = renderAxisLabels(a.axis_id, a.keyword);
-              return rendered ? { axisId: a.axis_id, labelA: rendered.labelA, labelB: rendered.labelB } : null;
+      if (next.cardType === "tradeoff-choice") {
+        if (structuredData) {
+          const sd = structuredData as { axes?: { axis_id: string; keyword?: string }[]; hero_traits?: { label: string; description: string }[] };
+          if (sd.axes) {
+            tradeoffAxes = sd.axes
+              .map((a) => {
+                const rendered = renderAxisLabels(a.axis_id, a.keyword);
+                return rendered ? { axisId: a.axis_id, labelA: rendered.labelA, labelB: rendered.labelB } : null;
+              })
+              .filter(Boolean) as { axisId: string; labelA: string; labelB: string }[];
+          }
+          // Cache hero_traits for HeroSelectCard (rendered after TradeoffCard)
+          if (sd.hero_traits?.length) {
+            heroTraitsRef.current = sd.hero_traits;
+          }
+        }
+        // Fallback: if AI didn't output DATA or axes mapped to empty, use 3 default axes
+        if (!tradeoffAxes?.length) {
+          const fallbackAxisIds = ["safety-vs-growth", "rules-vs-relations", "achievement-vs-balance"];
+          tradeoffAxes = fallbackAxisIds
+            .map((id) => {
+              const rendered = renderAxisLabels(id);
+              return rendered ? { axisId: id, labelA: rendered.labelA, labelB: rendered.labelB } : null;
             })
             .filter(Boolean) as { axisId: string; labelA: string; labelB: string }[];
-        }
-        // Cache hero_traits for HeroSelectCard (rendered after TradeoffCard)
-        if (sd.hero_traits?.length) {
-          heroTraitsRef.current = sd.hero_traits;
         }
       }
 
