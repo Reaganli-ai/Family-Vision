@@ -18,6 +18,7 @@ import {
   updateConversation,
   loadMessages,
   saveMessage,
+  deleteMessagesFromModule,
   saveCompassData,
   loadCompassData,
   type Conversation,
@@ -55,6 +56,7 @@ export const PHASE_LABELS: Record<PhaseId, string> = {
 };
 
 export interface Message {
+  id?: string;
   role: "ai" | "user";
   content: string;
   timestamp: Date;
@@ -62,7 +64,10 @@ export interface Message {
   cardProps?: Record<string, unknown>;
   cardData?: unknown;
   snapshotContent?: string;
+  moduleIndex?: number;
 }
+
+type SaveState = "saved" | "saving" | "error";
 
 const STEP_MAP: Record<number, StepId> = { 0: "step1", 1: "step2", 2: "step3", 3: "step4" };
 
@@ -93,6 +98,11 @@ const Workspace = () => {
   const [familyCode, setFamilyCode] = useState("");
   const [introShown, setIntroShown] = useState(false);
   const [allComplete, setAllComplete] = useState(false);
+  const [saveState, setSaveState] = useState<SaveState>("saved");
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const pendingSaveCountRef = useRef(0);
+  const pendingSaveErrorCountRef = useRef(0);
 
   // Structured compass data (source of truth for PDF)
   const compassDataRef = useRef<CompassDataSchema>({});
@@ -126,6 +136,172 @@ const Workspace = () => {
 
   conversationIdRef.current = conversationId;
 
+  const runPersistTask = useCallback(async (task: Promise<unknown>, errorLabel: string) => {
+    pendingSaveCountRef.current += 1;
+    setSaveState("saving");
+    if (pendingSaveErrorCountRef.current === 0) {
+      setSaveError(null);
+    }
+    try {
+      await task;
+    } catch (error) {
+      pendingSaveErrorCountRef.current += 1;
+      setSaveState("error");
+      setSaveError(errorLabel);
+      throw error;
+    } finally {
+      pendingSaveCountRef.current = Math.max(0, pendingSaveCountRef.current - 1);
+      if (pendingSaveCountRef.current === 0) {
+        if (pendingSaveErrorCountRef.current === 0) {
+          setSaveState("saved");
+          setLastSavedAt(new Date());
+        } else {
+          pendingSaveErrorCountRef.current = 0;
+        }
+      }
+    }
+  }, []);
+
+  const moduleIdByIndex = (moduleIndex: number): string =>
+    FLOW[Math.max(0, Math.min(moduleIndex, FLOW.length - 1))]?.id || "S";
+
+  const getNodeIndexByCardType = (moduleIndex: number, cardType: string): number => {
+    const nodes = FLOW[moduleIndex]?.nodes || [];
+    const idx = nodes.findIndex((flowNode) => flowNode.type === "card" && (flowNode as CardNode).cardType === cardType);
+    return idx >= 0 ? idx : 0;
+  };
+
+  const extractSnapshotsFromCompass = (compassData: CompassDataSchema): Record<string, string> => {
+    const snapshotMap: Record<string, string> = {};
+    for (const moduleId of ["S", "N", "W", "E"]) {
+      const moduleData = (compassData as Record<string, unknown>)[moduleId] as Record<string, unknown> | undefined;
+      const snapshotField = moduleData?.snapshot as { value?: unknown } | undefined;
+      if (snapshotField?.value && typeof snapshotField.value === "string") {
+        snapshotMap[moduleId] = snapshotField.value;
+      }
+    }
+    return snapshotMap;
+  };
+
+  const computeCompletedModulesFromCompass = (compassData: CompassDataSchema): number[] => {
+    const completed: number[] = [];
+    for (let moduleIndex = 0; moduleIndex < FLOW.length; moduleIndex += 1) {
+      const moduleId = moduleIdByIndex(moduleIndex);
+      const moduleData = (compassData as Record<string, unknown>)[moduleId] as Record<string, unknown> | undefined;
+      const snapshotField = moduleData?.snapshot as { value?: unknown } | undefined;
+      if (snapshotField?.value) {
+        completed.push(moduleIndex);
+      }
+    }
+    return completed;
+  };
+
+  const clampCursor = (moduleIndex: number, nodeIndex: number): { moduleIndex: number; nodeIndex: number } => {
+    const safeModuleIndex = Math.max(0, Math.min(moduleIndex, FLOW.length - 1));
+    const nodeCount = FLOW[safeModuleIndex]?.nodes.length || 1;
+    const safeNodeIndex = Math.max(0, Math.min(nodeIndex, nodeCount - 1));
+    return { moduleIndex: safeModuleIndex, nodeIndex: safeNodeIndex };
+  };
+
+  const rebuildModuleDataFromMessages = (msgs: Message[]): Record<string, unknown> => {
+    const rebuilt: Record<string, unknown> = {};
+    for (const message of msgs) {
+      if (!message.cardType || message.cardData === undefined) continue;
+      const inferredModuleIndex = typeof message.moduleIndex === "number"
+        ? message.moduleIndex
+        : currentModuleRef.current;
+      const moduleId = moduleIdByIndex(inferredModuleIndex);
+      const nodeIdx = getNodeIndexByCardType(inferredModuleIndex, message.cardType);
+      rebuilt[`${moduleId}_${nodeIdx}_${message.cardType}`] = message.cardData;
+    }
+    return rebuilt;
+  };
+
+  const ensureActiveCardMessage = (
+    msgs: Message[],
+    moduleIndex: number,
+    nodeIndex: number
+  ): Message[] => {
+    const currentFlowNode = FLOW[moduleIndex]?.nodes[nodeIndex];
+    if (!currentFlowNode || currentFlowNode.type !== "card") return msgs;
+
+    const expectedCardType = (currentFlowNode as CardNode).cardType;
+    const lastMessage = msgs[msgs.length - 1];
+    if (lastMessage?.cardType === expectedCardType) return msgs;
+
+    const restoredCardProps: Record<string, unknown> = { ...(currentFlowNode as CardNode).cardProps };
+    if (expectedCardType === "core-code-confirm") {
+      const fallbackCandidates = buildCoreCodeFallbackCandidates(compassDataRef.current);
+      if (fallbackCandidates.length > 0) restoredCardProps.candidates = fallbackCandidates;
+    }
+
+    return [
+      ...msgs,
+      {
+        role: "ai",
+        content: "",
+        timestamp: new Date(),
+        cardType: expectedCardType,
+        cardProps: restoredCardProps,
+        moduleIndex,
+      },
+    ];
+  };
+
+  const buildCoreCodeFallbackCandidates = (compassData: CompassDataSchema): { name: string; definition: string; evidence: Record<string, string> }[] => {
+    const storyText = (compassData.W?.story?.value as string) || "";
+    const heroes = compassData.W?.heroTraits?.value as string[] | undefined;
+    const quoteChild = (compassData.W?.quoteChildhood?.value as string) || "";
+    const quoteNow = (compassData.W?.quoteNow?.value as string) || "";
+    const themeTag = (compassData.W?.quoteThemeTag?.value as string) || "";
+    const storyShort = storyText.length > 30 ? `${storyText.slice(0, 30)}…` : storyText;
+
+    const fallbackCandidates: { name: string; definition: string; evidence: Record<string, string> }[] = [];
+
+    if (Array.isArray(heroes) && heroes[0]) {
+      const heroName = heroes[0];
+      fallbackCandidates.push({
+        name: heroName.length <= 4 ? heroName : heroName.slice(0, 4),
+        definition: `以「${heroName}」为精神基因，代代传承`,
+        evidence: { 英雄特质: heroes.slice(0, 2).join("、"), 故事: storyShort || "—" },
+      });
+    }
+
+    if (themeTag) {
+      fallbackCandidates.push({
+        name: themeTag.length <= 4 ? themeTag : themeTag.slice(0, 2),
+        definition: `用「${themeTag}」的力量面对生活的不确定`,
+        evidence: { 口头禅: `${quoteChild} → ${quoteNow}`.trim() || "—", 故事: storyShort || "—" },
+      });
+    } else if (Array.isArray(heroes) && heroes[1]) {
+      const heroName = heroes[1];
+      fallbackCandidates.push({
+        name: heroName.length <= 4 ? heroName : heroName.slice(0, 4),
+        definition: `在「${heroName}」中找到家庭的立足之本`,
+        evidence: { 英雄特质: heroes.slice(0, 3).join("、"), 故事: storyShort || "—" },
+      });
+    }
+
+    return fallbackCandidates;
+  };
+
+  const repairResumeCardProps = (msgs: Message[]): Message[] => {
+    return msgs.map((message) => {
+      if (message.cardType !== "core-code-confirm") return message;
+      const existingCandidates = (message.cardProps?.candidates as unknown[] | undefined) || [];
+      if (existingCandidates.length > 0) return message;
+      const fallbackCandidates = buildCoreCodeFallbackCandidates(compassDataRef.current);
+      if (fallbackCandidates.length === 0) return message;
+      return {
+        ...message,
+        cardProps: {
+          ...(message.cardProps || {}),
+          candidates: fallbackCandidates,
+        },
+      };
+    });
+  };
+
   // ─── Single init: load existing conversation OR create new one ───
   useEffect(() => {
     if (!user) {
@@ -144,51 +320,57 @@ const Workspace = () => {
         if (convos.length > 0) {
           // Load the most recent active conversation
           const latest = convos[0];
+          setAllComplete(false);
+          heroTraitsRef.current = null;
+          w01RoundRef.current = 0;
           setConversationId(latest.id);
           conversationIdRef.current = latest.id;
           setFamilyCode(latest.family_code);
-          setCurrentModule(latest.current_module);
-          currentModuleRef.current = latest.current_module;
-          setCurrentNode(latest.current_node);
-          currentNodeRef.current = latest.current_node;
           setStarted(latest.started);
           startedRef.current = latest.started;
-          // Restore completed modules: all modules before current are done
-          let restored = Array.from({ length: latest.current_module }, (_, i) => i);
 
           // Load compass data
           const cd = await loadCompassData(latest.id);
           if (cancelled) return;
-          if (cd) { compassDataRef.current = cd as CompassDataSchema; bumpCompass(); }
-
-          // Check if current module is also completed (has snapshot) — fixes 3/4 bug on refresh
-          const currentModuleId = FLOW[latest.current_module]?.id;
-          if (currentModuleId && (compassDataRef.current as Record<string, any>)[currentModuleId]?.snapshot) {
-            restored = [...restored, latest.current_module];
-            if (latest.current_module >= FLOW.length - 1) {
-              setAllComplete(true);
-            }
-          }
-          setCompletedModules(restored);
+          compassDataRef.current = (cd || {}) as CompassDataSchema;
+          bumpCompass();
 
           const rawMsgs = await loadMessages(latest.id);
           if (cancelled) return;
 
           // Deduplicate: keep only the first welcome message and first family-code card
-          const msgs = deduplicateMessages(rawMsgs);
+          const dedupedMessages = deduplicateMessages(rawMsgs);
+          const completedBySnapshot = computeCompletedModulesFromCompass(compassDataRef.current);
+          const fallbackCompleted = Array.from({ length: Math.max(0, latest.current_module) }, (_, i) => i);
+          const restoredCompletedModules = Array.from(new Set([...fallbackCompleted, ...completedBySnapshot]))
+            .filter((moduleIndex) => moduleIndex >= 0 && moduleIndex < FLOW.length);
+          setCompletedModules(restoredCompletedModules);
+          setAllComplete(restoredCompletedModules.includes(FLOW.length - 1));
+          setSnapshots(extractSnapshotsFromCompass(compassDataRef.current));
 
-          if (msgs.length > 0) {
-            lastSavedCountRef.current = msgs.length; // track deduped count, not raw
-            setMessages(msgs);
-          } else {
-            // Conversation exists but no messages — add welcome
-            setMessages(createWelcomeMessages());
-          }
+          const safeCursor = clampCursor(latest.current_module, latest.current_node);
+          const messageSeed = dedupedMessages.length > 0 ? dedupedMessages : createWelcomeMessages();
+          const fixedMessages = ensureActiveCardMessage(messageSeed, safeCursor.moduleIndex, safeCursor.nodeIndex);
+          const repairedMessages = repairResumeCardProps(fixedMessages);
+          const rebuiltModuleData = rebuildModuleDataFromMessages(repairedMessages);
+
+          setCurrentModule(safeCursor.moduleIndex);
+          currentModuleRef.current = safeCursor.moduleIndex;
+          setCurrentNode(safeCursor.nodeIndex);
+          currentNodeRef.current = safeCursor.nodeIndex;
+          setModuleData(rebuiltModuleData);
+          moduleDataRef.current = rebuiltModuleData;
+
+          lastSavedCountRef.current = repairedMessages.length;
+          setMessages(repairedMessages);
 
         } else {
           // No conversations — create a new one
           const convo = await createConversation("", "新对话");
           if (cancelled) return;
+          setAllComplete(false);
+          heroTraitsRef.current = null;
+          w01RoundRef.current = 0;
           setConversationId(convo.id);
           conversationIdRef.current = convo.id;
           setMessages(createWelcomeMessages());
@@ -216,44 +398,46 @@ const Workspace = () => {
 
     // Save each new message (fire-and-forget)
     for (const msg of newMsgs) {
-      saveMessage(cid, msg).catch((err) =>
-        console.error("Failed to save message:", err)
-      );
+      const normalizedMessage: Message = {
+        ...msg,
+        moduleIndex: typeof msg.moduleIndex === "number" ? msg.moduleIndex : currentModuleRef.current,
+      };
+      runPersistTask(
+        saveMessage(cid, normalizedMessage),
+        "消息保存失败，请稍后重试"
+      ).catch((err) => console.error("Failed to save message:", err));
     }
-  }, [messages, loadingConversation]);
+  }, [messages, loadingConversation, runPersistTask]);
 
   // Auto-sync flow state when key values change
   useEffect(() => {
     const cid = conversationIdRef.current;
     if (!cid || loadingConversation) return;
 
-    updateConversation(cid, {
+    runPersistTask(updateConversation(cid, {
       current_module: currentModule,
       current_node: currentNode,
       started,
       family_code: familyCode,
-    }).catch((err) => console.error("Failed to sync flow state:", err));
-  }, [currentModule, currentNode, started, familyCode, loadingConversation]);
+    }), "进度同步失败，请稍后重试").catch((err) => console.error("Failed to sync flow state:", err));
+  }, [currentModule, currentNode, started, familyCode, loadingConversation, runPersistTask]);
 
   // ─── History: load a different conversation ───
   const handleLoadConversation = useCallback(async (convo: Conversation) => {
     setShowHistory(false);
+    setAllComplete(false);
+    heroTraitsRef.current = null;
+    w01RoundRef.current = 0;
     setConversationId(convo.id);
     conversationIdRef.current = convo.id;
     setFamilyCode(convo.family_code);
     familyCodeRef.current = convo.family_code;
-    setCurrentModule(convo.current_module);
-    currentModuleRef.current = convo.current_module;
-    setCurrentNode(convo.current_node);
-    currentNodeRef.current = convo.current_node;
     setStarted(convo.started);
     startedRef.current = convo.started;
     setIntroShown(false);
     setModuleData({});
+    moduleDataRef.current = {};
 
-    // openLoops removed — memo system handles state
-    // Restore completed modules: all modules before current are done
-    let restored = Array.from({ length: convo.current_module }, (_, i) => i);
     compassDataRef.current = {};
     bumpCompass();
 
@@ -262,24 +446,37 @@ const Workspace = () => {
         loadMessages(convo.id),
         loadCompassData(convo.id),
       ]);
-      if (cd) { compassDataRef.current = cd as CompassDataSchema; bumpCompass(); }
+      compassDataRef.current = (cd || {}) as CompassDataSchema;
+      bumpCompass();
 
-      // Check if current module is also completed (has snapshot) — fixes 3/4 bug on refresh
-      const currentModuleId = FLOW[convo.current_module]?.id;
-      if (currentModuleId && (compassDataRef.current as Record<string, any>)[currentModuleId]?.snapshot) {
-        restored = [...restored, convo.current_module];
-        if (convo.current_module >= FLOW.length - 1) {
-          setAllComplete(true);
-        }
-      }
-      setCompletedModules(restored);
+      const completedBySnapshot = computeCompletedModulesFromCompass(compassDataRef.current);
+      const fallbackCompleted = Array.from({ length: Math.max(0, convo.current_module) }, (_, i) => i);
+      const restoredCompletedModules = Array.from(new Set([...fallbackCompleted, ...completedBySnapshot]))
+        .filter((moduleIndex) => moduleIndex >= 0 && moduleIndex < FLOW.length);
+      setCompletedModules(restoredCompletedModules);
+      setAllComplete(restoredCompletedModules.includes(FLOW.length - 1));
+      setSnapshots(extractSnapshotsFromCompass(compassDataRef.current));
 
-      const msgs = deduplicateMessages(rawMsgs);
-      lastSavedCountRef.current = msgs.length;
-      setMessages(msgs.length > 0 ? msgs : createWelcomeMessages());
+      const dedupedMessages = deduplicateMessages(rawMsgs);
+      const safeCursor = clampCursor(convo.current_module, convo.current_node);
+      const messageSeed = dedupedMessages.length > 0 ? dedupedMessages : createWelcomeMessages();
+      const fixedMessages = ensureActiveCardMessage(messageSeed, safeCursor.moduleIndex, safeCursor.nodeIndex);
+      const repairedMessages = repairResumeCardProps(fixedMessages);
+      const rebuiltModuleData = rebuildModuleDataFromMessages(repairedMessages);
+
+      setCurrentModule(safeCursor.moduleIndex);
+      currentModuleRef.current = safeCursor.moduleIndex;
+      setCurrentNode(safeCursor.nodeIndex);
+      currentNodeRef.current = safeCursor.nodeIndex;
+      setModuleData(rebuiltModuleData);
+      moduleDataRef.current = rebuiltModuleData;
+
+      lastSavedCountRef.current = repairedMessages.length;
+      setMessages(repairedMessages);
 
     } catch (err) {
       console.error("Failed to load messages:", err);
+      setAllComplete(false);
       lastSavedCountRef.current = 0;
       setMessages(createWelcomeMessages());
     }
@@ -287,8 +484,8 @@ const Workspace = () => {
 
   // ─── Welcome messages helper ───
   const createWelcomeMessages = (): Message[] => [
-    { role: "ai", content: "欢迎来到家庭愿景工坊。\n\n接下来我会引导你完成四个模块的思考，最终生成一份《家庭战略定位罗盘》。整个过程大约 20-30 分钟。", timestamp: new Date() },
-    { role: "ai", content: "", timestamp: new Date(), cardType: "family-code" },
+    { role: "ai", content: "欢迎来到家庭愿景工坊。\n\n接下来我会引导你完成四个模块的思考，最终生成一份《家庭战略定位罗盘》。整个过程大约 20-30 分钟。", timestamp: new Date(), moduleIndex: 0 },
+    { role: "ai", content: "", timestamp: new Date(), cardType: "family-code", moduleIndex: 0 },
   ];
 
   // ─── Deduplicate messages from DB (fix for legacy duplicated data) ───
@@ -324,10 +521,15 @@ const Workspace = () => {
       setCurrentNode(0);
       setStarted(false);
       setIntroShown(false);
+      setAllComplete(false);
       lastSavedCountRef.current = 0;
       setModuleData({});
+      moduleDataRef.current = {};
       setCompletedModules([]);
       setSnapshots({});
+      snapshotsRef.current = {};
+      heroTraitsRef.current = null;
+      w01RoundRef.current = 0;
   
       // openLoops removed — memo system handles state
       setMessages(createWelcomeMessages());
@@ -503,6 +705,7 @@ const Workspace = () => {
         content: cleanContent,
         timestamp: new Date(),
         snapshotContent,
+        moduleIndex: mod,
       };
       setMessages((prev) => [...prev, aiMsg]);
       setStreamingContent("");
@@ -511,9 +714,15 @@ const Workspace = () => {
       // W-01 multi-round gate: if AI didn't signal READY, stay on W-01
       const isW01 = FLOW[mod]?.id === "W" && node === 0;
       const hasReady = fullContent.includes("<!--READY-->");
-      if (isW01 && !hasReady) {
+      const hasCardCueInText =
+        /下方卡片|卡片中|回答两个问题|请在下面|写下来|请选择|继续填写/.test(cleanContent);
+      const shouldAdvanceFromW01 = hasReady || hasCardCueInText;
+      if (isW01 && !shouldAdvanceFromW01) {
         // Stay on W-01, don't advance — wait for user reply
         return;
+      }
+      if (isW01 && shouldAdvanceFromW01) {
+        w01RoundRef.current = 0;
       }
 
       // After AI message, advance to next node using the CURRENT refs (not stale closure)
@@ -521,7 +730,7 @@ const Workspace = () => {
     } catch (error) {
       setMessages((prev) => [
         ...prev,
-        { role: "ai", content: `抱歉，出了点问题。请稍后重试。`, timestamp: new Date() },
+        { role: "ai", content: `抱歉，出了点问题。请稍后重试。`, timestamp: new Date(), moduleIndex: mod },
       ]);
       setStreamingContent("");
       setIsAiTyping(false);
@@ -755,6 +964,7 @@ const Workspace = () => {
         role: "ai",
         content: "",
         timestamp: new Date(),
+        moduleIndex: mod,
         cardType: next.cardType,
         cardProps: {
           ...next.cardProps,
@@ -797,12 +1007,18 @@ const Workspace = () => {
         // Re-edit: update DB, rebuild memo, show confirmation
     
         if (conversationIdRef.current) {
-          updateConversation(conversationIdRef.current, { family_code: code }).catch(console.error);
-          saveCompassData(conversationIdRef.current, compassDataRef.current as Record<string, unknown>).catch(console.error);
+          runPersistTask(
+            updateConversation(conversationIdRef.current, { family_code: code }),
+            "家庭代号保存失败，请稍后重试"
+          ).catch(console.error);
+          runPersistTask(
+            saveCompassData(conversationIdRef.current, compassDataRef.current as Record<string, unknown>),
+            "家庭代号保存失败，请稍后重试"
+          ).catch(console.error);
         }
         setMessages((prev) => [
           ...prev,
-          { role: "ai", content: `家庭代号已从「${oldCode}」更新为「${code}」`, timestamp: new Date() },
+          { role: "ai", content: `家庭代号已从「${oldCode}」更新为「${code}」`, timestamp: new Date(), moduleIndex: currentModuleRef.current },
         ]);
         return;
       }
@@ -813,7 +1029,7 @@ const Workspace = () => {
   
       setMessages((prev) => [
         ...prev,
-        { role: "user", content: `家庭代号：${code}`, timestamp: new Date() },
+        { role: "user", content: `家庭代号：${code}`, timestamp: new Date(), moduleIndex: currentModuleRef.current },
       ]);
       setTimeout(() => requestAIMessage(code), 300);
       return;
@@ -836,9 +1052,12 @@ const Workspace = () => {
     // Rebuild memo at this milestone (card confirm)
 
     if (conversationIdRef.current) {
-      saveCompassData(
-        conversationIdRef.current,
-        compassDataRef.current as Record<string, unknown>,
+      runPersistTask(
+        saveCompassData(
+          conversationIdRef.current,
+          compassDataRef.current as Record<string, unknown>,
+        ),
+        "卡片数据保存失败，请稍后重试"
       ).catch((err) => console.error("Failed to save compass data:", err));
     }
 
@@ -851,7 +1070,7 @@ const Workspace = () => {
       // After capital-matrix → render capital-summary card with the rows injected
       setMessages((prev) => [
         ...prev,
-        { role: "user", content: summary, timestamp: new Date(), cardData: data },
+        { role: "user", content: summary, timestamp: new Date(), cardData: data, moduleIndex: mod },
       ]);
       const nextNode = curNode + 1;
       currentNodeRef.current = nextNode;
@@ -862,6 +1081,7 @@ const Workspace = () => {
         role: "ai",
         content: "",
         timestamp: new Date(),
+        moduleIndex: mod,
         cardType: "capital-summary",
         cardProps: { rows },
       };
@@ -927,19 +1147,34 @@ const Workspace = () => {
       summary = "确认快照，继续下一步。";
       // Save snapshot
       const moduleId = FLOW[mod]?.id || "";
+      const confirmedSnapshotText = data as string;
       setSnapshots((prev) => ({ ...prev, [moduleId]: data as string }));
       // Also persist snapshot to compass data (so restoration detects completion)
       if (moduleId) {
+        const existingCheckpoints = compassDataRef.current.checkpoints || {};
+        const currentModuleSnapshotData =
+          (compassDataRef.current as Record<string, unknown>)[moduleId] as Record<string, unknown> | undefined;
         compassDataRef.current = {
           ...compassDataRef.current,
+          checkpoints: {
+            ...existingCheckpoints,
+            [moduleId]: {
+              completedAt: new Date().toISOString(),
+              snapshot: confirmedSnapshotText,
+              cursorAtSave: { module: mod, node: curNode },
+            },
+          },
           [moduleId]: {
-            ...(compassDataRef.current as Record<string, any>)[moduleId],
-            snapshot: field(data as string, "user_selected"),
+            ...(currentModuleSnapshotData || {}),
+            snapshot: field(confirmedSnapshotText, "user_selected"),
           },
         };
         bumpCompass();
         if (conversationIdRef.current) {
-          saveCompassData(conversationIdRef.current, compassDataRef.current as Record<string, unknown>).catch(console.error);
+          runPersistTask(
+            saveCompassData(conversationIdRef.current, compassDataRef.current as Record<string, unknown>),
+            "模块快照保存失败，请稍后重试"
+          ).catch(console.error);
         }
       }
       // Module complete
@@ -956,7 +1191,7 @@ const Workspace = () => {
         setModuleData({});
         setMessages((prev) => [
           ...prev,
-          { role: "user", content: summary, timestamp: new Date() },
+          { role: "user", content: summary, timestamp: new Date(), moduleIndex: mod },
         ]);
         setTimeout(() => requestAIMessage(summary), 300);
         return;
@@ -965,11 +1200,12 @@ const Workspace = () => {
       setAllComplete(true);
       setMessages((prev) => [
         ...prev,
-        { role: "user", content: summary, timestamp: new Date() },
+        { role: "user", content: summary, timestamp: new Date(), moduleIndex: mod },
         {
           role: "ai",
           content: "恭喜你们完成了全部四个模块的探索！\n\n你们已经梳理了**家底**、审视了**眼光**、挖掘了**根基**、达成了**共识**。\n\n现在可以点击右侧的「导出家庭罗盘」，生成你们的专属 **《家庭战略定位罗盘》** 报告。",
           timestamp: new Date(),
+          moduleIndex: mod,
         },
       ]);
       return;
@@ -987,12 +1223,65 @@ const Workspace = () => {
           + `伴侣选的核心价值观：${d.partnerCore?.join("、")}，暂缓：${d.partnerDeferred?.join("、")}\n`
           + `经过协商，最终共识 → 核心聚焦：${d.core.join("、")}；战略暂缓：${d.deferred.join("、")}`;
       }
+
+      // E-04 -> E-05/E-06 robust path:
+      // Generate a deterministic bridge message locally and jump directly to agree-disagree card.
+      // This prevents the flow from stalling if remote AI request fails at this transition.
+      const selfCoreSet = new Set(d.selfCore);
+      const partnerCoreValues = d.partnerCore || [];
+      const partnerCoreSet = new Set(partnerCoreValues);
+      const coreConsensusValues = d.core.filter((value) => selfCoreSet.has(value) && partnerCoreSet.has(value));
+      const selfOnlyCoreValues = d.selfCore.filter((value) => !partnerCoreSet.has(value));
+      const partnerOnlyCoreValues = partnerCoreValues.filter((value) => !selfCoreSet.has(value));
+
+      const analysisParts: string[] = [];
+      analysisParts.push(`我看到了你的直觉锚定：希望孩子拥有「${d.core.join("、")}」，也在警惕某些风险。`);
+      if (d.partnerSkipped) {
+        analysisParts.push("这次先按你个人视角推进，我们后续也可以再补伴侣视角来做双人校准。");
+      } else {
+        if (coreConsensusValues.length > 0) {
+          analysisParts.push(`你们的核心共识是：${coreConsensusValues.join("、")}。`);
+        }
+        if (selfOnlyCoreValues.length > 0 || partnerOnlyCoreValues.length > 0) {
+          analysisParts.push(
+            `你们的差异主要在：${[
+              selfOnlyCoreValues.length > 0 ? `你更看重${selfOnlyCoreValues.join("、")}` : "",
+              partnerOnlyCoreValues.length > 0 ? `伴侣更看重${partnerOnlyCoreValues.join("、")}` : "",
+            ].filter(Boolean).join("；")}。`
+          );
+        }
+        analysisParts.push("这不是冲突，而是角色分工：一个偏推进，一个偏稳住。");
+      }
+      analysisParts.push("下面这句总结你认可吗？如果不完全认可，可以直接改写。");
+
+      const localBridgeMessage = analysisParts.join("\n\n");
+
+      setMessages((prev) => [
+        ...prev,
+        { role: "user", content: summary, timestamp: new Date(), cardData: data, moduleIndex: mod },
+        { role: "ai", content: localBridgeMessage, timestamp: new Date(), moduleIndex: mod },
+        {
+          role: "ai",
+          content: "",
+          timestamp: new Date(),
+          cardType: "agree-disagree",
+          moduleIndex: mod,
+          cardProps: {
+            disagreePlaceholder: "你觉得哪里不对？比如：我们其实更看重的是……",
+          },
+        },
+      ]);
+
+      const agreeDisagreeNodeIndex = curNode + 2;
+      currentNodeRef.current = agreeDisagreeNodeIndex;
+      setCurrentNode(agreeDisagreeNodeIndex);
+      return;
     }
 
     // Add as user message and request next AI response
     setMessages((prev) => [
       ...prev,
-      { role: "user", content: summary, timestamp: new Date(), cardData: data },
+      { role: "user", content: summary, timestamp: new Date(), cardData: data, moduleIndex: mod },
     ]);
 
     // Move to next node
@@ -1025,11 +1314,14 @@ const Workspace = () => {
       };
       bumpCompass();
       if (conversationIdRef.current) {
-        saveCompassData(conversationIdRef.current, compassDataRef.current as Record<string, unknown>).catch(console.error);
+        runPersistTask(
+          saveCompassData(conversationIdRef.current, compassDataRef.current as Record<string, unknown>),
+          "模块数据保存失败，请稍后重试"
+        ).catch(console.error);
       }
 
       const diagText = `**趋势洞察**\n${diag.explain}\n\n**家底关联**\n${diag.connect}\n\n**现状差距**\n${diag.gap}\n\n你觉得这个分析准确吗？`;
-      const aiMsg: Message = { role: "ai", content: diagText, timestamp: new Date() };
+      const aiMsg: Message = { role: "ai", content: diagText, timestamp: new Date(), moduleIndex: mod };
       setMessages((prev) => [...prev, aiMsg]);
 
       // Advance to N-06 (agree-disagree card)
@@ -1040,6 +1332,7 @@ const Workspace = () => {
       if (n06Node?.type === "card") {
         const cardMsg: Message = {
           role: "ai", content: "", timestamp: new Date(),
+          moduleIndex: mod,
           cardType: (n06Node as CardNode).cardType,
           cardProps: { ...(n06Node as CardNode).cardProps },
         };
@@ -1061,10 +1354,13 @@ const Workspace = () => {
       };
       bumpCompass();
       if (conversationIdRef.current) {
-        saveCompassData(conversationIdRef.current, compassDataRef.current as Record<string, unknown>).catch(console.error);
+        runPersistTask(
+          saveCompassData(conversationIdRef.current, compassDataRef.current as Record<string, unknown>),
+          "模块数据保存失败，请稍后重试"
+        ).catch(console.error);
       }
 
-      const aiMsg: Message = { role: "ai", content: "好的，我来帮你整理一下这个模块的要点。", timestamp: new Date() };
+      const aiMsg: Message = { role: "ai", content: "好的，我来帮你整理一下这个模块的要点。", timestamp: new Date(), moduleIndex: mod };
       setMessages((prev) => [...prev, aiMsg]);
 
       const n08 = nextNode + 1;
@@ -1074,6 +1370,7 @@ const Workspace = () => {
       if (n08Node?.type === "card") {
         const cardMsg: Message = {
           role: "ai", content: "", timestamp: new Date(),
+          moduleIndex: mod,
           cardType: (n08Node as CardNode).cardType,
           cardProps: { ...(n08Node as CardNode).cardProps, content: snapshotText },
         };
@@ -1106,13 +1403,17 @@ const Workspace = () => {
       };
       bumpCompass();
       if (conversationIdRef.current) {
-        saveCompassData(conversationIdRef.current, compassDataRef.current as Record<string, unknown>).catch(console.error);
+        runPersistTask(
+          saveCompassData(conversationIdRef.current, compassDataRef.current as Record<string, unknown>),
+          "模块数据保存失败，请稍后重试"
+        ).catch(console.error);
       }
 
       const aiMsg: Message = {
         role: "ai",
         content: `好的，根据你的所有回答，我帮你拼出了升级宣言：\n\n**${stmt}**\n\n下面是完整的根基快照，请确认。`,
         timestamp: new Date(),
+        moduleIndex: mod,
       };
       setMessages((prev) => [...prev, aiMsg]);
 
@@ -1124,6 +1425,7 @@ const Workspace = () => {
       if (w13Node?.type === "card") {
         const cardMsg: Message = {
           role: "ai", content: "", timestamp: new Date(),
+          moduleIndex: mod,
           cardType: (w13Node as CardNode).cardType,
           cardProps: { ...(w13Node as CardNode).cardProps, content: snapshotText },
         };
@@ -1142,6 +1444,7 @@ const Workspace = () => {
         role: "ai",
         content: "",
         timestamp: new Date(),
+        moduleIndex: mod,
         cardType: nextCardType,
         cardProps: {
           ...(nextFlowNode as CardNode).cardProps,
@@ -1156,16 +1459,18 @@ const Workspace = () => {
   }, [requestAIMessage]);
 
   const handleSendMessage = useCallback(async (content: string) => {
+    const mod = currentModuleRef.current;
     // Pre-flow special actions
     if (content === "##INTRO##") {
       setIntroShown(true);
       setMessages((prev) => [
         ...prev,
-        { role: "user", content: "能先帮我介绍一下这个流程吗？", timestamp: new Date() },
+        { role: "user", content: "能先帮我介绍一下这个流程吗？", timestamp: new Date(), moduleIndex: currentModuleRef.current },
         {
           role: "ai",
           content: "当然可以！\n\n整个工坊分为 **四个模块**，大约需要 20-30 分钟：\n\n**模块一 · 我们的家底（S）** — 梳理家庭现有的资源和优势\n**模块二 · 我们的眼光（N）** — 分析外部环境和未来趋势\n**模块三 · 我们的根基（W）** — 挖掘家族的底层价值观\n**模块四 · 我们的共识（E）** — 对齐教育方向和底线\n\n每个模块我会通过对话和互动卡片引导你思考，最后生成一份 **《家庭战略定位罗盘》**。",
           timestamp: new Date(),
+          moduleIndex: currentModuleRef.current,
         },
       ]);
       return;
@@ -1226,13 +1531,19 @@ const Workspace = () => {
       bumpCompass();
   
       if (conversationIdRef.current) {
-        updateConversation(conversationIdRef.current, { family_code: detectedCode }).catch(console.error);
-        saveCompassData(conversationIdRef.current, compassDataRef.current as Record<string, unknown>).catch(console.error);
+        runPersistTask(
+          updateConversation(conversationIdRef.current, { family_code: detectedCode }),
+          "家庭代号更新失败，请稍后重试"
+        ).catch(console.error);
+        runPersistTask(
+          saveCompassData(conversationIdRef.current, compassDataRef.current as Record<string, unknown>),
+          "家庭代号更新失败，请稍后重试"
+        ).catch(console.error);
       }
       setMessages((prev) => [
         ...prev,
-        { role: "user", content, timestamp: new Date() },
-        { role: "ai", content: `家庭代号已从「${oldCode}」更新为「${detectedCode}」`, timestamp: new Date() },
+        { role: "user", content, timestamp: new Date(), moduleIndex: currentModuleRef.current },
+        { role: "ai", content: `家庭代号已从「${oldCode}」更新为「${detectedCode}」`, timestamp: new Date(), moduleIndex: currentModuleRef.current },
       ]);
       return;
     }
@@ -1240,11 +1551,10 @@ const Workspace = () => {
     // Regular user text reply
     setMessages((prev) => [
       ...prev,
-      { role: "user", content, timestamp: new Date() },
+      { role: "user", content, timestamp: new Date(), moduleIndex: mod },
     ]);
 
     // Save user free-text responses to compass_data
-    const mod = currentModuleRef.current;
     const moduleId = FLOW[mod]?.id;
     const nodeIdx = currentNodeRef.current;
 
@@ -1254,9 +1564,12 @@ const Workspace = () => {
       compassDataRef.current.S.capitalRationale = field(content, "user_typed");
       bumpCompass();
       if (conversationIdRef.current) {
-        saveCompassData(
-          conversationIdRef.current,
-          compassDataRef.current as Record<string, unknown>,
+        runPersistTask(
+          saveCompassData(
+            conversationIdRef.current,
+            compassDataRef.current as Record<string, unknown>,
+          ),
+          "输入内容保存失败，请稍后重试"
         ).catch((err) => console.error("Failed to save S.capitalRationale:", err));
       }
     }
@@ -1275,12 +1588,14 @@ const Workspace = () => {
             role: "ai",
             content: "好的，聊了不少了。现在请在下面的卡片里，把你印象最深的那个瞬间用 1-3 句话写下来。",
             timestamp: new Date(),
+            moduleIndex: mod,
           }, {
             role: "ai",
             content: "",
             timestamp: new Date(),
             cardType: (cardNode as CardNode).cardType,
             cardProps: { ...(cardNode as CardNode).cardProps },
+            moduleIndex: mod,
           }]);
         }
         return;
@@ -1306,10 +1621,108 @@ const Workspace = () => {
         timestamp: new Date(),
         cardType: (nextFlowNode as CardNode).cardType,
         cardProps: { ...(nextFlowNode as CardNode).cardProps },
+        moduleIndex: mod,
       };
       setMessages((prev) => [...prev, cardMsg]);
     }
   }, [requestAIMessage]);
+
+  const pruneCompassFromModule = useCallback((sourceCompassData: CompassDataSchema, fromModuleIndex: number): CompassDataSchema => {
+    const nextCompassData: CompassDataSchema = { ...sourceCompassData };
+    for (let moduleIndex = fromModuleIndex; moduleIndex < FLOW.length; moduleIndex += 1) {
+      const moduleId = moduleIdByIndex(moduleIndex);
+      delete (nextCompassData as Record<string, unknown>)[moduleId];
+    }
+    if (nextCompassData.checkpoints) {
+      const nextCheckpoints = { ...nextCompassData.checkpoints };
+      for (let moduleIndex = fromModuleIndex; moduleIndex < FLOW.length; moduleIndex += 1) {
+        delete nextCheckpoints[moduleIdByIndex(moduleIndex)];
+      }
+      nextCompassData.checkpoints = nextCheckpoints;
+    }
+    return nextCompassData;
+  }, []);
+
+  const handleRestartModule = useCallback(async (targetModuleIndex: number) => {
+    const cid = conversationIdRef.current;
+    if (!cid) return;
+
+    const safeModuleIndex = Math.max(0, Math.min(targetModuleIndex, FLOW.length - 1));
+    const startedAfterRestart = startedRef.current || Boolean(familyCodeRef.current);
+
+    setIsAiTyping(false);
+    setStreamingContent("");
+    setAllComplete(false);
+    w01RoundRef.current = 0;
+    heroTraitsRef.current = null;
+
+    const prunedCompassData = pruneCompassFromModule(compassDataRef.current, safeModuleIndex);
+    compassDataRef.current = prunedCompassData;
+    bumpCompass();
+
+    const snapshotsAfterRestart = extractSnapshotsFromCompass(prunedCompassData);
+    const completedAfterRestart = computeCompletedModulesFromCompass(prunedCompassData)
+      .filter((moduleIndex) => moduleIndex < safeModuleIndex);
+
+    setSnapshots(snapshotsAfterRestart);
+    snapshotsRef.current = snapshotsAfterRestart;
+    setCompletedModules(completedAfterRestart);
+    completedModulesRef.current = completedAfterRestart;
+    setCurrentModule(safeModuleIndex);
+    currentModuleRef.current = safeModuleIndex;
+    setCurrentNode(0);
+    currentNodeRef.current = 0;
+    setModuleData({});
+    moduleDataRef.current = {};
+    allDataRef.current = Object.fromEntries(
+      Object.entries(allDataRef.current).filter(([moduleId]) => {
+        const moduleOrder = ["S", "N", "W", "E"];
+        const modulePosition = moduleOrder.indexOf(moduleId);
+        return modulePosition >= 0 && modulePosition < safeModuleIndex;
+      })
+    );
+    setStarted(startedAfterRestart);
+    startedRef.current = startedAfterRestart;
+
+    try {
+      await runPersistTask(Promise.all([
+        saveCompassData(cid, prunedCompassData as Record<string, unknown>),
+        deleteMessagesFromModule(cid, safeModuleIndex),
+        updateConversation(cid, {
+          current_module: safeModuleIndex,
+          current_node: 0,
+          started: startedAfterRestart,
+          family_code: familyCodeRef.current,
+        }),
+      ]), "模块重开失败，请稍后重试");
+
+      const remainingMessages = deduplicateMessages(await loadMessages(cid));
+      const fixedMessages = ensureActiveCardMessage(remainingMessages, safeModuleIndex, 0);
+      const repairedMessages = repairResumeCardProps(fixedMessages);
+      const rebuiltModuleData = rebuildModuleDataFromMessages(repairedMessages);
+
+      setMessages(repairedMessages);
+      messagesRef.current = repairedMessages;
+      lastSavedCountRef.current = repairedMessages.length;
+      setModuleData(rebuiltModuleData);
+      moduleDataRef.current = rebuiltModuleData;
+
+      if (startedAfterRestart) {
+        setTimeout(() => requestAIMessage(`我们重新开始${FLOW[safeModuleIndex]?.label || "当前"}模块`), 300);
+      }
+    } catch (error) {
+      console.error("Failed to restart module:", error);
+    }
+  }, [
+    computeCompletedModulesFromCompass,
+    deduplicateMessages,
+    ensureActiveCardMessage,
+    extractSnapshotsFromCompass,
+    pruneCompassFromModule,
+    rebuildModuleDataFromMessages,
+    requestAIMessage,
+    runPersistTask,
+  ]);
 
   const handleStepClick = (stepId: StepId) => {
     // Only allow clicking completed or current steps
@@ -1374,6 +1787,7 @@ const Workspace = () => {
                     });
                 }}
                 onLogout={handleLogout}
+                compassData={compassDataRef.current}
               />
             </div>
           </ResizablePanel>
@@ -1389,6 +1803,10 @@ const Workspace = () => {
                 onExport={() => window.open(`/compass?cid=${conversationId || ""}`, "_blank")}
                 compassData={compassDataRef.current}
                 started={started}
+                saveState={saveState}
+                lastSavedAt={lastSavedAt}
+                saveError={saveError}
+                onRestartModule={handleRestartModule}
               />
             </div>
           </ResizablePanel>

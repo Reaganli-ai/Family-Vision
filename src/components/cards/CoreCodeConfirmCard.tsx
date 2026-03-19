@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 interface Candidate {
   name: string;
@@ -10,37 +10,58 @@ interface Props {
   candidates: Candidate[];
   onConfirm: (data: { name: string; definition: string; userEdited?: boolean }) => void;
   disabled?: boolean;
+  confirmedValue?: { name: string; definition: string; userEdited?: boolean };
 }
 
-const CoreCodeConfirmCard = ({ candidates, onConfirm, disabled = false }: Props) => {
-  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+const CoreCodeConfirmCard = ({ candidates, onConfirm, disabled = false, confirmedValue }: Props) => {
+  const [selectedIdxList, setSelectedIdxList] = useState<number[]>([]);
   const [isCustom, setIsCustom] = useState(false);
-  const [editedName, setEditedName] = useState("");
-  const [editedDef, setEditedDef] = useState("");
+  const [editedName, setEditedName] = useState(confirmedValue?.name || "");
+  const [editedDef, setEditedDef] = useState(confirmedValue?.definition || "");
   const [confirmed, setConfirmed] = useState(false);
+
+  useEffect(() => {
+    if (confirmedValue?.name) setEditedName(confirmedValue.name);
+    if (confirmedValue?.definition) setEditedDef(confirmedValue.definition);
+  }, [confirmedValue]);
 
   const handleSelect = (idx: number) => {
     setIsCustom(false);
-    setSelectedIdx(idx);
-    setEditedName(candidates[idx].name);
-    setEditedDef(candidates[idx].definition);
+    setSelectedIdxList((prevSelectedIdxList) => {
+      const isAlreadySelected = prevSelectedIdxList.includes(idx);
+      const nextSelectedIdxList = isAlreadySelected
+        ? prevSelectedIdxList.filter((selectedIdx) => selectedIdx !== idx)
+        : [...prevSelectedIdxList, idx];
+
+      const latestSelectedIdx = nextSelectedIdxList[nextSelectedIdxList.length - 1];
+      if (latestSelectedIdx !== undefined) {
+        setEditedName(candidates[latestSelectedIdx].name);
+        setEditedDef(candidates[latestSelectedIdx].definition);
+      } else if (!confirmedValue) {
+        setEditedName("");
+        setEditedDef("");
+      }
+
+      return nextSelectedIdxList;
+    });
   };
 
   const handleCustom = () => {
-    setSelectedIdx(null);
+    setSelectedIdxList([]);
     setIsCustom(true);
     setEditedName("");
     setEditedDef("");
   };
 
-  const hasSelection = isCustom || selectedIdx !== null;
+  const hasSelection = isCustom || selectedIdxList.length > 0;
   const canConfirm = hasSelection && editedName.trim() && editedDef.trim();
 
   const handleConfirm = () => {
     const userEdited = isCustom ||
-      (selectedIdx !== null &&
-        (editedName.trim() !== candidates[selectedIdx].name ||
-         editedDef.trim() !== candidates[selectedIdx].definition));
+      (selectedIdxList.length !== 1) ||
+      (selectedIdxList.length === 1 &&
+        (editedName.trim() !== candidates[selectedIdxList[0]].name ||
+         editedDef.trim() !== candidates[selectedIdxList[0]].definition));
     setConfirmed(true);
     onConfirm({
       name: editedName.trim(),
@@ -50,11 +71,13 @@ const CoreCodeConfirmCard = ({ candidates, onConfirm, disabled = false }: Props)
   };
 
   if (confirmed || disabled) {
+    const displayName = editedName || confirmedValue?.name || "（未命名）";
+    const displayDefinition = editedDef || confirmedValue?.definition || "（暂无定义）";
     return (
       <div className="bg-card border border-border rounded-xl p-4 opacity-80">
         <p className="text-[12px] text-muted-foreground mb-1">家风内核 · 已完成</p>
-        <p className="text-[14px] font-medium text-primary">{editedName}</p>
-        <p className="text-[13px] text-foreground/80 mt-0.5">{editedDef}</p>
+        <p className="text-[14px] font-medium text-primary">{displayName}</p>
+        <p className="text-[13px] text-foreground/80 mt-0.5">{displayDefinition}</p>
       </div>
     );
   }
@@ -62,7 +85,7 @@ const CoreCodeConfirmCard = ({ candidates, onConfirm, disabled = false }: Props)
   return (
     <div className="bg-card border-2 border-primary/20 rounded-xl p-5 space-y-3">
       <p className="text-[14px] font-medium text-foreground">
-        基于你的故事和素材，我提炼了几个参考方向。你完全可以用自己的词：
+        基于你的故事和素材，我提炼了几个参考方向。你可以多选做参考，再确认一个最终命名：
       </p>
 
       <div className="space-y-2">
@@ -71,7 +94,7 @@ const CoreCodeConfirmCard = ({ candidates, onConfirm, disabled = false }: Props)
             key={idx}
             onClick={() => handleSelect(idx)}
             className={`w-full text-left rounded-lg p-3 transition-all border ${
-              selectedIdx === idx && !isCustom
+              selectedIdxList.includes(idx) && !isCustom
                 ? "border-primary bg-primary/5"
                 : "border-border bg-secondary/30 hover:bg-secondary/50"
             }`}
@@ -110,6 +133,11 @@ const CoreCodeConfirmCard = ({ candidates, onConfirm, disabled = false }: Props)
       {/* Inline editing area */}
       {hasSelection && (
         <div className="space-y-2 border-t border-border pt-3">
+          {selectedIdxList.length > 1 && (
+            <div className="text-[12px] text-muted-foreground bg-secondary/40 rounded-lg px-3 py-2">
+              你已选择 {selectedIdxList.length} 个候选，请在下方整理成一个最终命名与定义。
+            </div>
+          )}
           <div className="space-y-1">
             <label className="text-[12px] text-muted-foreground">名称</label>
             <input

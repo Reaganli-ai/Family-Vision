@@ -27,6 +27,7 @@ create table messages (
   card_props jsonb,
   card_data jsonb,
   snapshot_content text,
+  module_index int,
   created_at timestamptz default now() not null
 );
 
@@ -54,6 +55,7 @@ create index idx_conversations_user_status
 -- 消息查询
 create index idx_messages_conversation_id on messages(conversation_id);
 create index idx_messages_created_at on messages(conversation_id, created_at);
+create index idx_messages_conversation_module on messages(conversation_id, module_index);
 
 -- ============================================
 -- RLS（行级安全）：用户只能看到自己的数据
@@ -84,6 +86,11 @@ create policy "Users can view own messages"
 
 create policy "Users can create messages in own conversations"
   on messages for insert with check (
+    conversation_id in (select id from conversations where user_id = auth.uid())
+  );
+
+create policy "Users can delete messages in own conversations"
+  on messages for delete using (
     conversation_id in (select id from conversations where user_id = auth.uid())
   );
 
@@ -122,6 +129,31 @@ create trigger conversations_updated_at
 create trigger compass_data_updated_at
   before update on compass_data
   for each row execute function update_updated_at();
+
+create or replace function touch_conversation_updated_at_from_messages()
+returns trigger as $$
+declare
+  conversation_uuid uuid;
+begin
+  conversation_uuid := coalesce(new.conversation_id, old.conversation_id);
+  update conversations
+  set updated_at = now()
+  where id = conversation_uuid;
+  return coalesce(new, old);
+end;
+$$ language plpgsql;
+
+create trigger messages_touch_conversation_updated_at_insert
+  after insert on messages
+  for each row execute function touch_conversation_updated_at_from_messages();
+
+create trigger messages_touch_conversation_updated_at_update
+  after update on messages
+  for each row execute function touch_conversation_updated_at_from_messages();
+
+create trigger messages_touch_conversation_updated_at_delete
+  after delete on messages
+  for each row execute function touch_conversation_updated_at_from_messages();
 
 -- ============================================
 -- 自动归档：新建对话时，如果 active 对话超过 5 个，

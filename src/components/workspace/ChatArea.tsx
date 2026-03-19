@@ -22,6 +22,7 @@ import QuoteFillCard from "@/components/cards/QuoteFillCard";
 import CoreCodeConfirmCard from "@/components/cards/CoreCodeConfirmCard";
 import FlipsideFillCard from "@/components/cards/FlipsideFillCard";
 import UpgradePathCard from "@/components/cards/UpgradePathCard";
+import type { CompassDataSchema } from "@/lib/compass-schema";
 
 
 const PRE_FLOW_REPLIES = [
@@ -53,6 +54,7 @@ interface Props {
   introShown?: boolean;
   onShowHistory?: () => void;
   onLogout?: () => void;
+  compassData?: CompassDataSchema;
 }
 
 const ChatArea = ({
@@ -73,6 +75,7 @@ const ChatArea = ({
   introShown = false,
   onShowHistory,
   onLogout,
+  compassData,
 }: Props) => {
   const [input, setInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -269,6 +272,7 @@ const ChatArea = ({
             candidates={(msg.cardProps?.candidates as { name: string; definition: string; evidence: Record<string, string> }[]) || []}
             onConfirm={(data) => handleConfirm(data)}
             disabled={confirmed}
+            confirmedValue={compassData?.W?.coreCode?.value}
           />
         );
       case "flipside-fill":
@@ -341,7 +345,7 @@ const ChatArea = ({
       <div className="flex-1 overflow-y-auto min-h-0 px-6 py-8">
         <div className="max-w-3xl mx-auto space-y-6">
           {messages.map((msg, i) => (
-            <div key={i} className="animate-fade-in" style={{ animationDelay: `${Math.min(i * 0.05, 0.3)}s` }}>
+            <div key={msg.id || `${msg.role}-${msg.timestamp.getTime()}-${i}`} className="animate-fade-in" style={{ animationDelay: `${Math.min(i * 0.05, 0.3)}s` }}>
               {/* Card message */}
               {msg.cardType ? (
                 <div className="ml-12">

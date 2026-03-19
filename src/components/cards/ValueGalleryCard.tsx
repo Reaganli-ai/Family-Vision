@@ -131,9 +131,32 @@ const ValueGalleryCard = ({ onConfirm, disabled = false }: Props) => {
 
   // Initialize finalCore/finalDeferred when entering consensus
   const enterConsensus = () => {
-    const { coreIntersection, deferredIntersection } = consensusData;
-    setFinalCore(new Set(coreIntersection));
-    setFinalDeferred(new Set(deferredIntersection));
+    const {
+      coreIntersection,
+      selfOnlyCore,
+      partnerOnlyCore,
+      deferredIntersection,
+      selfOnlyDeferred,
+      partnerOnlyDeferred,
+    } = consensusData;
+
+    const defaultFinalCore: string[] = [];
+    for (const value of [...coreIntersection, ...selfOnlyCore, ...partnerOnlyCore]) {
+      if (defaultFinalCore.includes(value)) continue;
+      defaultFinalCore.push(value);
+      if (defaultFinalCore.length >= CORE_COUNT) break;
+    }
+
+    const defaultFinalDeferred: string[] = [];
+    for (const value of [...deferredIntersection, ...selfOnlyDeferred, ...partnerOnlyDeferred]) {
+      if (defaultFinalDeferred.includes(value)) continue;
+      if (defaultFinalCore.includes(value)) continue;
+      defaultFinalDeferred.push(value);
+      if (defaultFinalDeferred.length >= DEFER_COUNT) break;
+    }
+
+    setFinalCore(new Set(defaultFinalCore));
+    setFinalDeferred(new Set(defaultFinalDeferred));
     setStep("consensus");
   };
 
@@ -249,19 +272,25 @@ const ValueGalleryCard = ({ onConfirm, disabled = false }: Props) => {
   // ── Consensus panel ──
   if (isConsensus) {
     const { coreIntersection, selfOnlyCore, partnerOnlyCore, deferredIntersection, selfOnlyDeferred, partnerOnlyDeferred, corePool, deferredPool } = consensusData;
+    const availableDeferredPool = deferredPool.filter((value) => !finalCore.has(value));
+    const requiredDeferredCount = Math.min(DEFER_COUNT, availableDeferredPool.length);
+    const canConfirmConsensus = finalCore.size === CORE_COUNT && finalDeferred.size >= requiredDeferredCount;
 
     return (
       <div className="bg-card border-2 border-primary/20 rounded-xl p-5 space-y-4">
         <div>
-          <p className="text-[14px] font-semibold text-foreground">你们的共识与差异</p>
-          <p className="text-[12px] text-muted-foreground mt-1">请基于双方选择，确认最终的 {CORE_COUNT} 个核心聚焦 + {DEFER_COUNT} 个战略暂缓</p>
+          <p className="text-[14px] font-semibold text-foreground">先看共识和差异，再定最终一致</p>
+          <p className="text-[12px] text-muted-foreground mt-1 leading-relaxed">
+            先看双方已经一致的部分，再看核心差异，最后一起定下
+            {CORE_COUNT} 个核心聚焦和 {DEFER_COUNT} 个战略暂缓。
+          </p>
         </div>
 
         {/* Consensus / Difference display */}
         <div className="space-y-3">
           {coreIntersection.length > 0 && (
             <div className="bg-emerald-50 rounded-lg p-3">
-              <p className="text-[12px] font-medium text-emerald-800 mb-1.5">你们都选了（核心共识）</p>
+              <p className="text-[12px] font-medium text-emerald-800 mb-1.5">1）双方共同选择（核心共识）</p>
               <div className="flex flex-wrap gap-1.5">
                 {coreIntersection.map((v) => (
                   <span key={v} className="text-[12px] bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-full font-medium">{v}</span>
@@ -272,7 +301,7 @@ const ValueGalleryCard = ({ onConfirm, disabled = false }: Props) => {
 
           {(selfOnlyCore.length > 0 || partnerOnlyCore.length > 0) && (
             <div className="bg-amber-50 rounded-lg p-3">
-              <p className="text-[12px] font-medium text-amber-800 mb-1.5">核心差异</p>
+              <p className="text-[12px] font-medium text-amber-800 mb-1.5">2）核心差异（你们各自更看重）</p>
               <div className="space-y-1">
                 {selfOnlyCore.length > 0 && (
                   <p className="text-[12px] text-amber-700">你选了：{selfOnlyCore.join("、")}</p>
@@ -286,7 +315,7 @@ const ValueGalleryCard = ({ onConfirm, disabled = false }: Props) => {
 
           {deferredIntersection.length > 0 && (
             <div className="bg-secondary/50 rounded-lg p-3">
-              <p className="text-[12px] font-medium text-muted-foreground mb-1.5">你们都同意暂缓</p>
+              <p className="text-[12px] font-medium text-muted-foreground mb-1.5">双方都同意暂缓</p>
               <div className="flex flex-wrap gap-1.5">
                 {deferredIntersection.map((v) => (
                   <span key={v} className="text-[12px] bg-secondary text-muted-foreground px-2.5 py-1 rounded-full">{v}</span>
@@ -297,7 +326,7 @@ const ValueGalleryCard = ({ onConfirm, disabled = false }: Props) => {
 
           {(selfOnlyDeferred.length > 0 || partnerOnlyDeferred.length > 0) && (
             <div className="bg-secondary/30 rounded-lg p-3">
-              <p className="text-[12px] font-medium text-muted-foreground mb-1.5">暂缓差异</p>
+              <p className="text-[12px] font-medium text-muted-foreground mb-1.5">战略暂缓差异</p>
               <div className="space-y-1">
                 {selfOnlyDeferred.length > 0 && (
                   <p className="text-[12px] text-muted-foreground">你暂缓了：{selfOnlyDeferred.join("、")}</p>
@@ -313,7 +342,7 @@ const ValueGalleryCard = ({ onConfirm, disabled = false }: Props) => {
         {/* Final core selection from pool */}
         <div className="space-y-2">
           <p className="text-[12px] text-primary font-medium">
-            → 确认最终 {CORE_COUNT} 个核心聚焦（{finalCore.size}/{CORE_COUNT}）
+            3）定下最终一致：{CORE_COUNT} 个核心聚焦（{finalCore.size}/{CORE_COUNT}）
           </p>
           <div className="flex flex-wrap gap-2">
             {corePool.map((v) => {
@@ -340,7 +369,7 @@ const ValueGalleryCard = ({ onConfirm, disabled = false }: Props) => {
         {/* Final deferred selection from pool */}
         <div className="space-y-2">
           <p className="text-[12px] text-primary font-medium">
-            → 确认最终 {DEFER_COUNT} 个战略暂缓（{finalDeferred.size}/{DEFER_COUNT}）
+            定下最终一致：{DEFER_COUNT} 个战略暂缓（{finalDeferred.size}/{DEFER_COUNT}）
           </p>
           <div className="flex flex-wrap gap-2">
             {deferredPool.filter((v) => !finalCore.has(v)).map((v) => {
@@ -374,16 +403,18 @@ const ValueGalleryCard = ({ onConfirm, disabled = false }: Props) => {
           </button>
           <button
             onClick={() => handleConfirm(false)}
-            disabled={finalCore.size < CORE_COUNT || (() => {
-              const available = deferredPool.filter((v) => !finalCore.has(v)).length;
-              const required = Math.min(DEFER_COUNT, available);
-              return finalDeferred.size < required;
-            })()}
+            disabled={!canConfirmConsensus}
             className="px-5 py-2 rounded-lg text-[13px] font-medium bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
           >
-            确认价值观 →
+            确认最终一致 →
           </button>
         </div>
+        {!canConfirmConsensus && (
+          <p className="text-[11px] text-muted-foreground text-right">
+            还需选择：核心聚焦 {finalCore.size}/{CORE_COUNT}
+            ，战略暂缓 {finalDeferred.size}/{requiredDeferredCount}
+          </p>
+        )}
       </div>
     );
   }
@@ -599,7 +630,7 @@ const ValueGalleryCard = ({ onConfirm, disabled = false }: Props) => {
                 onClick={enterConsensus}
                 className="px-5 py-2 rounded-lg text-[13px] font-medium bg-primary text-primary-foreground hover:opacity-90 transition-all"
               >
-                查看共识 →
+                进入共识整理 →
               </button>
             )}
           </>

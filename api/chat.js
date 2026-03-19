@@ -4,6 +4,99 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
+const AXIS_DEFINITIONS = [
+  { axis_id: "integrity-vs-result", triggers: ["诚信", "守信", "承诺", "厚道", "信用", "说到做到"], fallbackKeyword: "诚信底线" },
+  { axis_id: "safety-vs-growth", triggers: ["风险", "安全", "保守", "稳", "冒险", "谨慎"], fallbackKeyword: "稳健取舍" },
+  { axis_id: "rules-vs-relations", triggers: ["规矩", "规则", "人情", "关系", "情义", "讲理"], fallbackKeyword: "规矩与人情" },
+  { axis_id: "achievement-vs-balance", triggers: ["成绩", "最好", "优秀", "卓越", "平衡", "压力"], fallbackKeyword: "成就与平衡" },
+  { axis_id: "obedience-vs-expression", triggers: ["听话", "表达", "独立", "服从", "反思"], fallbackKeyword: "服从与表达" },
+  { axis_id: "face-vs-authenticity", triggers: ["面子", "真实", "体面", "坦诚", "自尊"], fallbackKeyword: "面子与真实" },
+];
+
+const HERO_TRAIT_LIBRARY = [
+  { label: "守信重诺", description: "答应的事会尽力做到", triggers: ["诚信", "守信", "承诺", "信用", "说到做到"] },
+  { label: "稳健审慎", description: "权衡风险后再行动", triggers: ["风险", "安全", "保守", "稳", "谨慎"] },
+  { label: "重情守义", description: "讲原则也讲情分", triggers: ["人情", "关系", "情义", "规矩"] },
+  { label: "追求卓越", description: "做事希望达到更高标准", triggers: ["成绩", "最好", "优秀", "卓越"] },
+  { label: "独立担当", description: "遇事先承担再反思", triggers: ["独立", "担当", "反思", "自己"] },
+  { label: "真诚坦荡", description: "真实表达，不做表面功夫", triggers: ["真实", "坦诚", "面子", "体面"] },
+];
+
+function normalizeText(text) {
+  return (text || "").replace(/\s+/g, "").toLowerCase();
+}
+
+function extractStoryKeywords(sourceText) {
+  const keywords = [];
+  const pushUnique = (word) => {
+    if (!word) return;
+    if (!keywords.includes(word)) keywords.push(word);
+  };
+
+  const keywordCandidates = ["诚信", "守信", "承诺", "厚道", "风险", "稳健", "规矩", "人情", "成绩", "平衡", "独立", "反思", "真实"];
+  for (const candidate of keywordCandidates) {
+    if (sourceText.includes(candidate)) pushUnique(candidate);
+    if (keywords.length >= 4) break;
+  }
+
+  if (keywords.length < 2) {
+    pushUnique("价值取舍");
+    pushUnique("家庭底线");
+  }
+
+  return keywords.slice(0, 4);
+}
+
+function buildW03FallbackData(messages) {
+  const latestUserMessage = [...(messages || [])]
+    .reverse()
+    .find((message) => message?.role === "user" && typeof message?.content === "string")
+    ?.content || "";
+  const normalizedUserText = normalizeText(latestUserMessage);
+
+  const matchedAxes = [];
+  for (const axisDefinition of AXIS_DEFINITIONS) {
+    const matchedTrigger = axisDefinition.triggers.find((trigger) => normalizedUserText.includes(trigger));
+    if (!matchedTrigger) continue;
+    matchedAxes.push({ axis_id: axisDefinition.axis_id, keyword: matchedTrigger });
+    if (matchedAxes.length >= 3) break;
+  }
+
+  if (matchedAxes.length < 2) {
+    for (const axisDefinition of AXIS_DEFINITIONS) {
+      if (matchedAxes.some((axis) => axis.axis_id === axisDefinition.axis_id)) continue;
+      matchedAxes.push({ axis_id: axisDefinition.axis_id, keyword: axisDefinition.fallbackKeyword });
+      if (matchedAxes.length >= 2) break;
+    }
+  }
+
+  const storyKeywords = extractStoryKeywords(latestUserMessage);
+
+  const heroTraits = [];
+  const pushHeroTrait = (heroTrait) => {
+    if (heroTraits.some((item) => item.label === heroTrait.label)) return;
+    heroTraits.push({ label: heroTrait.label, description: heroTrait.description });
+  };
+
+  for (const heroTrait of HERO_TRAIT_LIBRARY) {
+    const hasTrigger = heroTrait.triggers.some((trigger) => normalizedUserText.includes(trigger));
+    if (!hasTrigger) continue;
+    pushHeroTrait(heroTrait);
+    if (heroTraits.length >= 4) break;
+  }
+
+  if (heroTraits.length < 2) {
+    pushHeroTrait(HERO_TRAIT_LIBRARY[0]);
+    pushHeroTrait(HERO_TRAIT_LIBRARY[1]);
+  }
+
+  return {
+    axes: matchedAxes.slice(0, 3),
+    story_keywords: storyKeywords,
+    hero_traits: heroTraits.slice(0, 4),
+  };
+}
+
 const SYSTEM_PROMPT = `你是"彼灯教育·家庭愿景工坊"的 AI 导师。
 
 ## 你的角色
@@ -113,6 +206,7 @@ export default async function handler(req, res) {
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
 
+    let streamedText = "";
     const stream = anthropic.messages.stream({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 512,
@@ -125,8 +219,17 @@ export default async function handler(req, res) {
         event.type === "content_block_delta" &&
         event.delta.type === "text_delta"
       ) {
+        streamedText += event.delta.text;
         res.write(`data: ${JSON.stringify({ text: event.delta.text })}\n\n`);
       }
+    }
+
+    const isW03 = flowContext?.nodeId === "W-03";
+    const missingDataTag = !streamedText.includes("<!--DATA:");
+    if (isW03 && missingDataTag) {
+      const fallbackPayload = buildW03FallbackData(messages);
+      const fallbackDataTag = `<!--DATA:${JSON.stringify(fallbackPayload)}-->`;
+      res.write(`data: ${JSON.stringify({ text: fallbackDataTag })}\n\n`);
     }
 
     res.write("data: [DONE]\n\n");

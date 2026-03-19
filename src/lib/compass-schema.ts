@@ -23,6 +23,11 @@ export const field = <T>(value: T, source: FieldSource): TrackedField<T> => ({
 
 export interface CompassDataSchema {
   familyCode?: TrackedField<string>;
+  checkpoints?: Record<string, {
+    completedAt: string;
+    snapshot: string;
+    cursorAtSave: { module: number; node: number };
+  }>;
 
   S?: {
     capitalMatrix?: TrackedField<{ label: string; level: string; keyword: string }[]>;

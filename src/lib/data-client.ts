@@ -31,6 +31,7 @@ interface DbMessage {
   card_props: Record<string, unknown> | null;
   card_data: unknown | null;
   snapshot_content: string | null;
+  module_index: number | null;
   created_at: string;
 }
 
@@ -105,6 +106,7 @@ export async function loadMessages(conversationId: string): Promise<Message[]> {
   if (error) throw error;
 
   return (data || []).map((m: DbMessage) => ({
+    id: m.id,
     role: m.role as "ai" | "user",
     content: m.content,
     timestamp: new Date(m.created_at),
@@ -112,24 +114,75 @@ export async function loadMessages(conversationId: string): Promise<Message[]> {
     cardProps: m.card_props || undefined,
     cardData: m.card_data || undefined,
     snapshotContent: m.snapshot_content || undefined,
+    moduleIndex: typeof m.module_index === "number" ? m.module_index : undefined,
   }));
 }
 
 export async function saveMessage(conversationId: string, msg: Message): Promise<void> {
   const t = Date.now();
-  const { error } = await supabase
+  const payloadWithModule = {
+    conversation_id: conversationId,
+    role: msg.role,
+    content: msg.content,
+    card_type: msg.cardType || null,
+    card_props: msg.cardProps || null,
+    card_data: msg.cardData || null,
+    snapshot_content: msg.snapshotContent || null,
+    module_index: typeof msg.moduleIndex === "number" ? msg.moduleIndex : null,
+  };
+
+  let { error } = await supabase
     .from("messages")
-    .insert({
-      conversation_id: conversationId,
-      role: msg.role,
-      content: msg.content,
-      card_type: msg.cardType || null,
-      card_props: msg.cardProps || null,
-      card_data: msg.cardData || null,
-      snapshot_content: msg.snapshotContent || null,
-    });
+    .insert(payloadWithModule);
+
+  // Backward compatibility: if DB schema not yet migrated (no module_index),
+  // retry once without this field so existing deployments keep working.
+  if (error?.message?.includes("module_index")) {
+    ({ error } = await supabase
+      .from("messages")
+      .insert({
+        conversation_id: conversationId,
+        role: msg.role,
+        content: msg.content,
+        card_type: msg.cardType || null,
+        card_props: msg.cardProps || null,
+        card_data: msg.cardData || null,
+        snapshot_content: msg.snapshotContent || null,
+      }));
+  }
+
+  if (!error) {
+    const { error: touchError } = await supabase
+      .from("conversations")
+      .update({ updated_at: new Date().toISOString() })
+      .eq("id", conversationId);
+    if (touchError) {
+      console.error("Failed to touch conversation updated_at:", touchError);
+    }
+  }
 
   log("saveMessage", { cid: conversationId.slice(0, 8), role: msg.role }, t, { error: error?.message });
+  if (error) throw error;
+}
+
+export async function deleteMessagesFromModule(
+  conversationId: string,
+  fromModuleIndex: number
+): Promise<void> {
+  const t = Date.now();
+  const { error } = await supabase
+    .from("messages")
+    .delete()
+    .eq("conversation_id", conversationId)
+    .gte("module_index", fromModuleIndex);
+
+  // If schema isn't migrated yet, fail clearly so caller can choose fallback.
+  if (error?.message?.includes("module_index")) {
+    log("deleteMessagesFromModule", { cid: conversationId.slice(0, 8), fromModuleIndex }, t, { error: "module_index missing" });
+    throw new Error("messages.module_index 不存在，请先执行数据库迁移");
+  }
+
+  log("deleteMessagesFromModule", { cid: conversationId.slice(0, 8), fromModuleIndex }, t, { error: error?.message });
   if (error) throw error;
 }
 

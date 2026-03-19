@@ -29,6 +29,7 @@ const TagSelectCard = ({
   const [customTag, setCustomTag] = useState("");
   const [showCustom, setShowCustom] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
+  const [customHint, setCustomHint] = useState("");
 
   const toggleTag = (tag: string) => {
     setSelected((prev) => {
@@ -40,20 +41,55 @@ const TagSelectCard = ({
   };
 
   const addCustom = () => {
-    if (!customTag.trim()) return;
-    if (maxSelect === 1) {
-      setSelected([customTag.trim()]);
-    } else if (selected.length < maxSelect) {
-      setSelected((prev) => [...prev, customTag.trim()]);
+    const trimmedCustomTag = customTag.trim();
+    if (!trimmedCustomTag) return;
+    if (selected.includes(trimmedCustomTag)) {
+      setCustomHint("这个选项已经在列表里了");
+      return;
     }
+    if (maxSelect !== 1 && selected.length >= maxSelect) {
+      setCustomHint(`最多选 ${maxSelect} 个`);
+      return;
+    }
+    if (maxSelect === 1) {
+      setSelected([trimmedCustomTag]);
+    } else {
+      setSelected((prevSelected) => [...prevSelected, trimmedCustomTag]);
+    }
+    setCustomHint("");
     setCustomTag("");
     setShowCustom(false);
   };
 
   const handleConfirm = () => {
+    const trimmedCustomTag = customTag.trim();
+    const hasPendingCustomTag =
+      showCustom &&
+      trimmedCustomTag.length > 0 &&
+      !selected.includes(trimmedCustomTag) &&
+      (maxSelect === 1 || selected.length < maxSelect);
+
+    const finalSelected = hasPendingCustomTag
+      ? (maxSelect === 1 ? [trimmedCustomTag] : [...selected, trimmedCustomTag])
+      : selected;
+
+    if (hasPendingCustomTag) {
+      setSelected(finalSelected);
+      setCustomTag("");
+      setShowCustom(false);
+      setCustomHint("");
+    }
     setConfirmed(true);
-    onConfirm(selected);
+    onConfirm(finalSelected);
   };
+
+  const trimmedPendingCustomTag = customTag.trim();
+  const canAutoIncludePendingCustomTag =
+    showCustom &&
+    trimmedPendingCustomTag.length > 0 &&
+    !selected.includes(trimmedPendingCustomTag) &&
+    (maxSelect === 1 || selected.length < maxSelect);
+  const canConfirm = selected.length > 0 || canAutoIncludePendingCustomTag;
 
   if (confirmed || disabled) {
     return (
@@ -105,43 +141,51 @@ const TagSelectCard = ({
         </button>
       )}
       {allowCustom && showCustom && (
-        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-          <input
-            type="text"
-            autoFocus
-            value={customTag}
-            onChange={(e) => setCustomTag(e.target.value)}
-            onKeyDown={(e) => {
-              e.stopPropagation();
-              if (e.key === "Enter") {
-                e.preventDefault();
-                addCustom();
-              }
-            }}
-            maxLength={30}
-            placeholder={customPlaceholder}
-            className="flex-1 bg-secondary/40 rounded-lg px-3 py-1.5 text-[12px] outline-none placeholder:text-muted-foreground/40 focus:ring-1 focus:ring-primary/30 border border-border"
-          />
-          <button
-            onClick={(e) => { e.stopPropagation(); addCustom(); }}
-            disabled={!customTag.trim()}
-            className="text-[12px] text-primary font-medium disabled:opacity-40 px-2 py-1 rounded hover:bg-primary/10 transition-colors"
-          >
-            添加
-          </button>
-          <button
-            onClick={(e) => { e.stopPropagation(); setShowCustom(false); setCustomTag(""); }}
-            className="text-[12px] text-muted-foreground px-2 py-1 rounded hover:bg-secondary transition-colors"
-          >
-            取消
-          </button>
+        <div className="space-y-1.5" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              autoFocus
+              value={customTag}
+              onChange={(e) => {
+                setCustomTag(e.target.value);
+                if (customHint) setCustomHint("");
+              }}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  addCustom();
+                }
+              }}
+              maxLength={30}
+              placeholder={customPlaceholder}
+              className="flex-1 bg-secondary/40 rounded-lg px-3 py-1.5 text-[12px] outline-none placeholder:text-muted-foreground/40 focus:ring-1 focus:ring-primary/30 border border-border"
+            />
+            <button
+              onClick={(e) => { e.stopPropagation(); addCustom(); }}
+              disabled={!customTag.trim()}
+              className="text-[12px] text-primary font-medium disabled:opacity-40 px-2 py-1 rounded hover:bg-primary/10 transition-colors"
+            >
+              添加
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowCustom(false); setCustomTag(""); setCustomHint(""); }}
+              className="text-[12px] text-muted-foreground px-2 py-1 rounded hover:bg-secondary transition-colors"
+            >
+              取消
+            </button>
+          </div>
+          {customHint && (
+            <p className="text-[11px] text-muted-foreground">{customHint}</p>
+          )}
         </div>
       )}
 
       <div className="flex justify-end pt-1">
         <button
           onClick={handleConfirm}
-          disabled={selected.length === 0}
+          disabled={!canConfirm}
           className="px-5 py-2 rounded-lg text-[13px] font-medium transition-all bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {confirmText}
